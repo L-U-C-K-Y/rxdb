@@ -9,7 +9,7 @@ exports.createRxCollection = createRxCollection;
 exports.isRxCollection = isRxCollection;
 var _createClass2 = _interopRequireDefault(require("@babel/runtime/helpers/createClass"));
 var _operators = require("rxjs/operators");
-var _util = require("./util");
+var _utils = require("./plugins/utils");
 var _rxCollectionHelper = require("./rx-collection-helper");
 var _rxQuery = require("./rx-query");
 var _rxError = require("./rx-error");
@@ -20,6 +20,8 @@ var _hooks = require("./hooks");
 var _rxDocumentPrototypeMerge = require("./rx-document-prototype-merge");
 var _rxStorageHelper = require("./rx-storage-helper");
 var _replicationProtocol = require("./replication-protocol");
+var _incrementalWrite = require("./incremental-write");
+var _rxDocument = require("./rx-document");
 var HOOKS_WHEN = ['pre', 'post'];
 var HOOKS_KEYS = ['insert', 'save', 'remove', 'create'];
 var hooksApplied = false;
@@ -28,22 +30,15 @@ var RxCollectionBase = /*#__PURE__*/function () {
    * Stores all 'normal' documents
    */
 
-  function RxCollectionBase(database, name, schema, internalStorageInstance) {
-    var instanceCreationOptions = arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : {};
-    var migrationStrategies = arguments.length > 5 && arguments[5] !== undefined ? arguments[5] : {};
-    var methods = arguments.length > 6 && arguments[6] !== undefined ? arguments[6] : {};
-    var attachments = arguments.length > 7 && arguments[7] !== undefined ? arguments[7] : {};
-    var options = arguments.length > 8 && arguments[8] !== undefined ? arguments[8] : {};
-    var cacheReplacementPolicy = arguments.length > 9 && arguments[9] !== undefined ? arguments[9] : _queryCache.defaultCacheReplacementPolicy;
-    var statics = arguments.length > 10 && arguments[10] !== undefined ? arguments[10] : {};
-    var conflictHandler = arguments.length > 11 && arguments[11] !== undefined ? arguments[11] : _replicationProtocol.defaultConflictHandler;
+  function RxCollectionBase(database, name, schema, internalStorageInstance, instanceCreationOptions = {}, migrationStrategies = {}, methods = {}, attachments = {}, options = {}, cacheReplacementPolicy = _queryCache.defaultCacheReplacementPolicy, statics = {}, conflictHandler = _replicationProtocol.defaultConflictHandler) {
     this.storageInstance = {};
     this.timeouts = new Set();
-    this._atomicUpsertQueues = new Map();
+    this.incrementalWriteQueue = {};
+    this._incrementalUpsertQueues = new Map();
     this.synced = false;
     this.hooks = {};
     this._subs = [];
-    this._docCache = new _docCache.DocCache();
+    this._docCache = {};
     this._queryCache = (0, _queryCache.createQueryCache)();
     this.$ = {};
     this._changeEventBuffer = {};
@@ -64,279 +59,216 @@ var RxCollectionBase = /*#__PURE__*/function () {
     _applyHookFunctions(this.asRxCollection);
   }
   var _proto = RxCollectionBase.prototype;
-  _proto.prepare = function prepare() {
-    try {
-      var _this2 = this;
-      _this2.storageInstance = (0, _rxStorageHelper.getWrappedStorageInstance)(_this2.database, _this2.internalStorageInstance, _this2.schema.jsonSchema);
-      _this2.$ = _this2.database.eventBulks$.pipe((0, _operators.filter)(function (changeEventBulk) {
-        return changeEventBulk.collectionName === _this2.name;
-      }), (0, _operators.mergeMap)(function (changeEventBulk) {
-        return changeEventBulk.events;
-      }));
-      _this2._changeEventBuffer = (0, _changeEventBuffer.createChangeEventBuffer)(_this2.asRxCollection);
+  _proto.prepare = async function prepare() {
+    this.storageInstance = (0, _rxStorageHelper.getWrappedStorageInstance)(this.database, this.internalStorageInstance, this.schema.jsonSchema);
+    this.incrementalWriteQueue = new _incrementalWrite.IncrementalWriteQueue(this.storageInstance, this.schema.primaryPath, (newData, oldData) => (0, _rxDocument.beforeDocumentUpdateWrite)(this, newData, oldData), result => this._runHooks('post', 'save', result));
+    this.$ = this.database.eventBulks$.pipe((0, _operators.filter)(changeEventBulk => changeEventBulk.collectionName === this.name), (0, _operators.mergeMap)(changeEventBulk => changeEventBulk.events));
+    this._changeEventBuffer = (0, _changeEventBuffer.createChangeEventBuffer)(this.asRxCollection);
+    this._docCache = new _docCache.DocumentCache(this.schema.primaryPath, this.$.pipe((0, _operators.filter)(cE => !cE.isLocal)), docData => (0, _rxDocumentPrototypeMerge.createNewRxDocument)(this.asRxCollection, docData));
 
-      /**
-       * Instead of resolving the EventBulk array here and spit it into
-       * single events, we should fully work with event bulks internally
-       * to save performance.
-       */
-      return Promise.resolve(_this2.database.storageToken).then(function (databaseStorageToken) {
-        var subDocs = _this2.storageInstance.changeStream().subscribe(function (eventBulk) {
-          var changeEventBulk = {
-            id: eventBulk.id,
-            internal: false,
-            collectionName: _this2.name,
-            storageToken: databaseStorageToken,
-            events: eventBulk.events.map(function (ev) {
-              return (0, _rxStorageHelper.storageChangeEventToRxChangeEvent)(false, ev, _this2);
-            }),
-            databaseToken: _this2.database.token,
-            checkpoint: eventBulk.checkpoint,
-            context: eventBulk.context
-          };
-          _this2.database.$emit(changeEventBulk);
+    /**
+     * Instead of resolving the EventBulk array here and spit it into
+     * single events, we should fully work with event bulks internally
+     * to save performance.
+     */
+    var databaseStorageToken = await this.database.storageToken;
+    var subDocs = this.storageInstance.changeStream().subscribe(eventBulk => {
+      var changeEventBulk = {
+        id: eventBulk.id,
+        internal: false,
+        collectionName: this.name,
+        storageToken: databaseStorageToken,
+        events: eventBulk.events.map(ev => (0, _rxStorageHelper.storageChangeEventToRxChangeEvent)(false, ev, this)),
+        databaseToken: this.database.token,
+        checkpoint: eventBulk.checkpoint,
+        context: eventBulk.context
+      };
+      this.database.$emit(changeEventBulk);
+    });
+    this._subs.push(subDocs);
+
+    /**
+     * Resolve the conflict tasks
+     * of the RxStorageInstance
+     */
+    this._subs.push(this.storageInstance.conflictResultionTasks().subscribe(task => {
+      this.conflictHandler(task.input, task.context).then(output => {
+        this.storageInstance.resolveConflictResultionTask({
+          id: task.id,
+          output
         });
-        _this2._subs.push(subDocs);
-
-        /**
-         * When a write happens to the collection
-         * we find the changed document in the docCache
-         * and tell it that it has to change its data.
-         */
-        _this2._subs.push(_this2.$.pipe((0, _operators.filter)(function (cE) {
-          return !cE.isLocal;
-        })).subscribe(function (cE) {
-          // when data changes, send it to RxDocument in docCache
-          var doc = _this2._docCache.get(cE.documentId);
-          if (doc) {
-            doc._handleChangeEvent(cE);
-          }
-        }));
-
-        /**
-         * Resolve the conflict tasks
-         * of the RxStorageInstance
-         */
-        _this2._subs.push(_this2.storageInstance.conflictResultionTasks().subscribe(function (task) {
-          _this2.conflictHandler(task.input, task.context).then(function (output) {
-            _this2.storageInstance.resolveConflictResultionTask({
-              id: task.id,
-              output: output
-            });
-          });
-        }));
-        return _util.PROMISE_RESOLVE_VOID;
       });
-    } catch (e) {
-      return Promise.reject(e);
-    }
-  } // overwritte by migration-plugin
+    }));
+    return _utils.PROMISE_RESOLVE_VOID;
+  }
+
+  // overwritte by migration-plugin
   ;
   _proto.migrationNeeded = function migrationNeeded() {
-    throw (0, _util.pluginMissing)('migration');
+    throw (0, _utils.pluginMissing)('migration');
   };
   _proto.getDataMigrator = function getDataMigrator() {
-    throw (0, _util.pluginMissing)('migration');
+    throw (0, _utils.pluginMissing)('migration');
   };
-  _proto.migrate = function migrate() {
-    var batchSize = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 10;
+  _proto.migrate = function migrate(batchSize = 10) {
     return this.getDataMigrator().migrate(batchSize);
   };
-  _proto.migratePromise = function migratePromise() {
-    var batchSize = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 10;
+  _proto.migratePromise = function migratePromise(batchSize = 10) {
     return this.getDataMigrator().migratePromise(batchSize);
   };
-  _proto.insert = function insert(json) {
-    try {
-      var _this4 = this;
-      // TODO do we need fillObjectDataBeforeInsert() here because it is also run at bulkInsert() later
-      var useJson = (0, _rxCollectionHelper.fillObjectDataBeforeInsert)(_this4.schema, json);
-      return Promise.resolve(_this4.bulkInsert([useJson])).then(function (writeResult) {
-        var isError = writeResult.error[0];
-        (0, _rxStorageHelper.throwIfIsStorageWriteError)(_this4, useJson[_this4.schema.primaryPath], json, isError);
-        var insertResult = (0, _util.ensureNotFalsy)(writeResult.success[0]);
-        return insertResult;
-      });
-    } catch (e) {
-      return Promise.reject(e);
-    }
+  _proto.insert = async function insert(json) {
+    // TODO do we need fillObjectDataBeforeInsert() here because it is also run at bulkInsert() later
+    var useJson = (0, _rxCollectionHelper.fillObjectDataBeforeInsert)(this.schema, json);
+    var writeResult = await this.bulkInsert([useJson]);
+    var isError = writeResult.error[0];
+    (0, _rxStorageHelper.throwIfIsStorageWriteError)(this, useJson[this.schema.primaryPath], json, isError);
+    var insertResult = (0, _utils.ensureNotFalsy)(writeResult.success[0]);
+    return insertResult;
   };
-  _proto.bulkInsert = function bulkInsert(docsData) {
-    try {
-      var _temp4 = function _temp4(docs) {
-        var docsMap = new Map();
-        var insertRows = docs.map(function (doc) {
-          docsMap.set(doc[_this6.schema.primaryPath], doc);
-          var docData = Object.assign(doc, {
-            _attachments: {},
-            _meta: (0, _util.getDefaultRxDocumentMeta)(),
-            _rev: (0, _util.getDefaultRevision)(),
-            _deleted: false
-          });
-          var row = {
-            document: docData
-          };
-          return row;
-        });
-        return Promise.resolve(_this6.storageInstance.bulkWrite(insertRows, 'rx-collection-bulk-insert')).then(function (results) {
-          function _temp2() {
-            return {
-              success: rxDocuments,
-              error: Object.values(results.error)
-            };
-          }
-          // create documents
-          var successDocData = Object.values(results.success);
-          var rxDocuments = successDocData.map(function (writtenDocData) {
-            var doc = (0, _rxDocumentPrototypeMerge.createRxDocument)(_this6, writtenDocData);
-            return doc;
-          });
-          var _temp = function () {
-            if (_this6.hasHooks('post', 'insert')) {
-              return Promise.resolve(Promise.all(rxDocuments.map(function (doc) {
-                return _this6._runHooks('post', 'insert', docsMap.get(doc.primary), doc);
-              }))).then(function () {});
-            }
-          }();
-          return _temp && _temp.then ? _temp.then(_temp2) : _temp2(_temp);
-        });
+  _proto.bulkInsert = async function bulkInsert(docsData) {
+    /**
+     * Optimization shortcut,
+     * do nothing when called with an empty array
+     */
+    if (docsData.length === 0) {
+      return {
+        success: [],
+        error: []
       };
-      var _this6 = this;
-      /**
-       * Optimization shortcut,
-       * do nothing when called with an empty array
-       */
-      if (docsData.length === 0) {
-        return Promise.resolve({
-          success: [],
-          error: []
-        });
-      }
-      var useDocs = docsData.map(function (docData) {
-        var useDocData = (0, _rxCollectionHelper.fillObjectDataBeforeInsert)(_this6.schema, docData);
-        return useDocData;
-      });
-      var _this5$hasHooks2 = _this6.hasHooks('pre', 'insert');
-      return Promise.resolve(_this5$hasHooks2 ? Promise.resolve(Promise.all(useDocs.map(function (doc) {
-        return _this6._runHooks('pre', 'insert', doc).then(function () {
-          return doc;
-        });
-      }))).then(_temp4) : _temp4(useDocs));
-    } catch (e) {
-      return Promise.reject(e);
     }
-  };
-  _proto.bulkRemove = function bulkRemove(ids) {
-    try {
-      var _this8 = this;
-      /**
-       * Optimization shortcut,
-       * do nothing when called with an empty array
-       */
-      if (ids.length === 0) {
-        return Promise.resolve({
-          success: [],
-          error: []
-        });
-      }
-      return Promise.resolve(_this8.findByIds(ids)).then(function (rxDocumentMap) {
-        var docsData = [];
-        var docsMap = new Map();
-        Array.from(rxDocumentMap.values()).forEach(function (rxDocument) {
-          var data = (0, _util.clone)(rxDocument.toJSON(true));
-          docsData.push(data);
-          docsMap.set(rxDocument.primary, data);
-        });
-        return Promise.resolve(Promise.all(docsData.map(function (doc) {
-          var primary = doc[_this8.schema.primaryPath];
-          return _this8._runHooks('pre', 'remove', doc, rxDocumentMap.get(primary));
-        }))).then(function () {
-          var removeDocs = docsData.map(function (doc) {
-            var writeDoc = (0, _util.flatClone)(doc);
-            writeDoc._deleted = true;
-            return {
-              previous: doc,
-              document: writeDoc
-            };
-          });
-          return Promise.resolve(_this8.storageInstance.bulkWrite(removeDocs, 'rx-collection-bulk-remove')).then(function (results) {
-            var successIds = Object.keys(results.success);
+    var useDocs = docsData.map(docData => {
+      var useDocData = (0, _rxCollectionHelper.fillObjectDataBeforeInsert)(this.schema, docData);
+      return useDocData;
+    });
+    var docs = this.hasHooks('pre', 'insert') ? await Promise.all(useDocs.map(doc => {
+      return this._runHooks('pre', 'insert', doc).then(() => {
+        return doc;
+      });
+    })) : useDocs;
+    var docsMap = new Map();
+    var insertRows = docs.map(doc => {
+      docsMap.set(doc[this.schema.primaryPath], doc);
+      var docData = Object.assign(doc, {
+        _attachments: {},
+        _meta: (0, _utils.getDefaultRxDocumentMeta)(),
+        _rev: (0, _utils.getDefaultRevision)(),
+        _deleted: false
+      });
+      var row = {
+        document: docData
+      };
+      return row;
+    });
+    var results = await this.storageInstance.bulkWrite(insertRows, 'rx-collection-bulk-insert');
 
-            // run hooks
-            return Promise.resolve(Promise.all(successIds.map(function (id) {
-              return _this8._runHooks('post', 'remove', docsMap.get(id), rxDocumentMap.get(id));
-            }))).then(function () {
-              var rxDocuments = successIds.map(function (id) {
-                return rxDocumentMap.get(id);
-              });
-              return {
-                success: rxDocuments,
-                error: Object.values(results.error)
-              };
-            });
-          });
-        });
-      });
-    } catch (e) {
-      return Promise.reject(e);
+    // create documents
+    var successDocData = Object.values(results.success);
+    var rxDocuments = successDocData.map(writtenDocData => this._docCache.getCachedRxDocument(writtenDocData));
+    if (this.hasHooks('post', 'insert')) {
+      await Promise.all(rxDocuments.map(doc => {
+        return this._runHooks('post', 'insert', docsMap.get(doc.primary), doc);
+      }));
     }
+    return {
+      success: rxDocuments,
+      error: Object.values(results.error)
+    };
+  };
+  _proto.bulkRemove = async function bulkRemove(ids) {
+    /**
+     * Optimization shortcut,
+     * do nothing when called with an empty array
+     */
+    if (ids.length === 0) {
+      return {
+        success: [],
+        error: []
+      };
+    }
+    var rxDocumentMap = await this.findByIds(ids).exec();
+    var docsData = [];
+    var docsMap = new Map();
+    Array.from(rxDocumentMap.values()).forEach(rxDocument => {
+      var data = rxDocument.toMutableJSON(true);
+      docsData.push(data);
+      docsMap.set(rxDocument.primary, data);
+    });
+    await Promise.all(docsData.map(doc => {
+      var primary = doc[this.schema.primaryPath];
+      return this._runHooks('pre', 'remove', doc, rxDocumentMap.get(primary));
+    }));
+    var removeDocs = docsData.map(doc => {
+      var writeDoc = (0, _utils.flatClone)(doc);
+      writeDoc._deleted = true;
+      return {
+        previous: doc,
+        document: writeDoc
+      };
+    });
+    var results = await this.storageInstance.bulkWrite(removeDocs, 'rx-collection-bulk-remove');
+    var successIds = Object.keys(results.success);
+
+    // run hooks
+    await Promise.all(successIds.map(id => {
+      return this._runHooks('post', 'remove', docsMap.get(id), rxDocumentMap.get(id));
+    }));
+    var rxDocuments = successIds.map(id => (0, _utils.getFromMapOrThrow)(rxDocumentMap, id));
+    return {
+      success: rxDocuments,
+      error: Object.values(results.error)
+    };
   }
+
   /**
    * same as bulkInsert but overwrites existing document with same primary
-   */
-  ;
-  _proto.bulkUpsert = function bulkUpsert(docsData) {
-    try {
-      var _this10 = this;
-      var insertData = [];
-      var useJsonByDocId = new Map();
-      docsData.forEach(function (docData) {
-        var useJson = (0, _rxCollectionHelper.fillObjectDataBeforeInsert)(_this10.schema, docData);
-        var primary = useJson[_this10.schema.primaryPath];
-        if (!primary) {
-          throw (0, _rxError.newRxError)('COL3', {
-            primaryPath: _this10.schema.primaryPath,
-            data: useJson,
-            schema: _this10.schema.jsonSchema
-          });
-        }
-        useJsonByDocId.set(primary, useJson);
-        insertData.push(useJson);
-      });
-      return Promise.resolve(_this10.bulkInsert(insertData)).then(function (insertResult) {
-        var ret = insertResult.success.slice(0);
-        return Promise.resolve(Promise.all(insertResult.error.map(function (error) {
-          var id = error.documentId;
-          var writeData = (0, _util.getFromMapOrThrow)(useJsonByDocId, id);
-          var docDataInDb = (0, _util.ensureNotFalsy)(error.documentInDb);
-          var doc = (0, _rxDocumentPrototypeMerge.createRxDocument)(_this10.asRxCollection, docDataInDb);
-          return doc.atomicUpdate(function () {
-            return writeData;
-          });
-        }))).then(function (updatedDocs) {
-          ret = ret.concat(updatedDocs);
-          return ret;
+   */;
+  _proto.bulkUpsert = async function bulkUpsert(docsData) {
+    var insertData = [];
+    var useJsonByDocId = new Map();
+    docsData.forEach(docData => {
+      var useJson = (0, _rxCollectionHelper.fillObjectDataBeforeInsert)(this.schema, docData);
+      var primary = useJson[this.schema.primaryPath];
+      if (!primary) {
+        throw (0, _rxError.newRxError)('COL3', {
+          primaryPath: this.schema.primaryPath,
+          data: useJson,
+          schema: this.schema.jsonSchema
         });
-      });
-    } catch (e) {
-      return Promise.reject(e);
-    }
-  }
-  /**
-   * same as insert but overwrites existing document with same primary
-   */
-  ;
-  _proto.upsert = function upsert(json) {
-    return this.bulkUpsert([json]).then(function (result) {
-      return result[0];
+      }
+      useJsonByDocId.set(primary, useJson);
+      insertData.push(useJson);
     });
+    var insertResult = await this.bulkInsert(insertData);
+    var ret = insertResult.success.slice(0);
+    var updatedDocs = await Promise.all(insertResult.error.map(async error => {
+      if (error.status !== 409) {
+        throw (0, _rxError.newRxError)('VD2', {
+          collection: this.name,
+          writeError: error
+        });
+      }
+      var id = error.documentId;
+      var writeData = (0, _utils.getFromMapOrThrow)(useJsonByDocId, id);
+      var docDataInDb = (0, _utils.ensureNotFalsy)(error.documentInDb);
+      var doc = this._docCache.getCachedRxDocument(docDataInDb);
+      var newDoc = await doc.incrementalModify(() => writeData);
+      return newDoc;
+    }));
+    ret = ret.concat(updatedDocs);
+    return ret;
   }
 
   /**
-   * upserts to a RxDocument, uses atomicUpdate if document already exists
+   * same as insert but overwrites existing document with same primary
    */;
-  _proto.atomicUpsert = function atomicUpsert(json) {
-    var _this11 = this;
+  _proto.upsert = function upsert(json) {
+    return this.bulkUpsert([json]).then(result => result[0]);
+  }
+
+  /**
+   * upserts to a RxDocument, uses incrementalModify if document already exists
+   */;
+  _proto.incrementalUpsert = function incrementalUpsert(json) {
     var useJson = (0, _rxCollectionHelper.fillObjectDataBeforeInsert)(this.schema, json);
     var primary = useJson[this.schema.primaryPath];
     if (!primary) {
@@ -346,42 +278,39 @@ var RxCollectionBase = /*#__PURE__*/function () {
     }
 
     // ensure that it won't try 2 parallel runs
-    var queue = this._atomicUpsertQueues.get(primary);
+    var queue = this._incrementalUpsertQueues.get(primary);
     if (!queue) {
-      queue = _util.PROMISE_RESOLVE_VOID;
+      queue = _utils.PROMISE_RESOLVE_VOID;
     }
-    queue = queue.then(function () {
-      return _atomicUpsertEnsureRxDocumentExists(_this11, primary, useJson);
-    }).then(function (wasInserted) {
+    queue = queue.then(() => _incrementalUpsertEnsureRxDocumentExists(this, primary, useJson)).then(wasInserted => {
       if (!wasInserted.inserted) {
-        return _atomicUpsertUpdate(wasInserted.doc, useJson).then(function () {
-          return wasInserted.doc;
-        });
+        return _incrementalUpsertUpdate(wasInserted.doc, useJson);
       } else {
         return wasInserted.doc;
       }
     });
-    this._atomicUpsertQueues.set(primary, queue);
+    this._incrementalUpsertQueues.set(primary, queue);
     return queue;
   };
   _proto.find = function find(queryObj) {
     if (typeof queryObj === 'string') {
       throw (0, _rxError.newRxError)('COL5', {
-        queryObj: queryObj
+        queryObj
       });
     }
     if (!queryObj) {
       queryObj = (0, _rxQuery._getDefaultQuery)();
     }
-    var query = (0, _rxQuery.createRxQuery)('find', queryObj, this.asRxCollection);
+    var query = (0, _rxQuery.createRxQuery)('find', queryObj, this);
     return query;
   };
   _proto.findOne = function findOne(queryObj) {
     var query;
     if (typeof queryObj === 'string') {
-      var _selector;
       query = (0, _rxQuery.createRxQuery)('findOne', {
-        selector: (_selector = {}, _selector[this.schema.primaryPath] = queryObj, _selector),
+        selector: {
+          [this.schema.primaryPath]: queryObj
+        },
         limit: 1
       }, this);
     } else {
@@ -394,11 +323,11 @@ var RxCollectionBase = /*#__PURE__*/function () {
         throw (0, _rxError.newRxError)('QU6');
       }
       queryObj.limit = 1;
-      query = (0, _rxQuery.createRxQuery)('findOne', queryObj, this.asRxCollection);
+      query = (0, _rxQuery.createRxQuery)('findOne', queryObj, this);
     }
     if (typeof queryObj === 'number' || Array.isArray(queryObj)) {
       throw (0, _rxError.newRxTypeError)('COL6', {
-        queryObj: queryObj
+        queryObj
       });
     }
     return query;
@@ -407,7 +336,7 @@ var RxCollectionBase = /*#__PURE__*/function () {
     if (!queryObj) {
       queryObj = (0, _rxQuery._getDefaultQuery)();
     }
-    var query = (0, _rxQuery.createRxQuery)('count', queryObj, this.asRxCollection);
+    var query = (0, _rxQuery.createRxQuery)('count', queryObj, this);
     return query;
   }
 
@@ -416,158 +345,22 @@ var RxCollectionBase = /*#__PURE__*/function () {
    * has way better performance then running multiple findOne() or a find() with a complex $or-selected
    */;
   _proto.findByIds = function findByIds(ids) {
-    try {
-      var _this13 = this;
-      var ret = new Map();
-      var mustBeQueried = [];
-
-      // first try to fill from docCache
-      ids.forEach(function (id) {
-        var doc = _this13._docCache.get(id);
-        if (doc) {
-          ret.set(id, doc);
-        } else {
-          mustBeQueried.push(id);
+    var mangoQuery = {
+      selector: {
+        [this.schema.primaryPath]: {
+          $in: ids.slice(0)
         }
-      });
-
-      // find everything which was not in docCache
-      var _temp6 = function () {
-        if (mustBeQueried.length > 0) {
-          return Promise.resolve(_this13.storageInstance.findDocumentsById(mustBeQueried, false)).then(function (docs) {
-            Object.values(docs).forEach(function (docData) {
-              var doc = (0, _rxDocumentPrototypeMerge.createRxDocument)(_this13, docData);
-              ret.set(doc.primary, doc);
-            });
-          });
-        }
-      }();
-      return Promise.resolve(_temp6 && _temp6.then ? _temp6.then(function () {
-        return ret;
-      }) : ret);
-    } catch (e) {
-      return Promise.reject(e);
-    }
-  }
-  /**
-   * like this.findByIds but returns an observable
-   * that always emits the current state
-   */
-  ;
-  _proto.findByIds$ = function findByIds$(ids) {
-    var _this14 = this;
-    var currentValue = null;
-    var lastChangeEvent = -1;
-
-    /**
-     * Ensure we do not process events in parallel
-     */
-    var queue = _util.PROMISE_RESOLVE_VOID;
-    var initialPromise = this.findByIds(ids).then(function (docsMap) {
-      lastChangeEvent = _this14._changeEventBuffer.counter;
-      currentValue = docsMap;
-    });
-    var firstEmitDone = false;
-    return this.$.pipe((0, _operators.startWith)(null),
-    /**
-     * Optimization shortcut.
-     * Do not proceed if the emitted RxChangeEvent
-     * is not relevant for the query.
-     */
-    (0, _operators.filter)(function (changeEvent) {
-      if (
-      // first emit has no event
-      changeEvent && (
-      // local documents are not relevant for the query
-      changeEvent.isLocal ||
-      // document of the change is not in the ids list.
-      !ids.includes(changeEvent.documentId))) {
-        return false;
-      } else {
-        return true;
       }
-    }), (0, _operators.mergeMap)(function () {
-      return initialPromise;
-    }),
-    /**
-     * Because shareReplay with refCount: true
-     * will often subscribe/unsusbscribe
-     * we always ensure that we handled all missed events
-     * since the last subscription.
-     */
-    (0, _operators.mergeMap)(function () {
-      queue = queue.then(function () {
-        try {
-          var _temp10 = function _temp10(_result) {
-            if (_exit2) return _result;
-            firstEmitDone = true;
-            return currentValue;
-          };
-          var _exit2 = false;
-          /**
-           * We first have to clone the Map
-           * to ensure we do not create side effects by mutating
-           * a Map that has already been returned before.
-           */
-          currentValue = new Map((0, _util.ensureNotFalsy)(currentValue));
-          var missedChangeEvents = _this14._changeEventBuffer.getFrom(lastChangeEvent + 1);
-          lastChangeEvent = _this14._changeEventBuffer.counter;
-          var _temp11 = function () {
-            if (missedChangeEvents === null) {
-              /**
-               * changeEventBuffer is of bounds -> we must re-execute over the database
-               * because we cannot calculate the new results just from the events.
-               */
-              return Promise.resolve(_this14.findByIds(ids)).then(function (newResult) {
-                lastChangeEvent = _this14._changeEventBuffer.counter;
-                _exit2 = true;
-                return newResult;
-              });
-            } else {
-              var resultHasChanged = false;
-              missedChangeEvents.forEach(function (rxChangeEvent) {
-                var docId = rxChangeEvent.documentId;
-                if (!ids.includes(docId)) {
-                  // document is not relevant for the result set
-                  return;
-                }
-                var op = rxChangeEvent.operation;
-                if (op === 'INSERT' || op === 'UPDATE') {
-                  resultHasChanged = true;
-                  var rxDocument = (0, _rxDocumentPrototypeMerge.createRxDocument)(_this14.asRxCollection, rxChangeEvent.documentData);
-                  (0, _util.ensureNotFalsy)(currentValue).set(docId, rxDocument);
-                } else {
-                  if ((0, _util.ensureNotFalsy)(currentValue).has(docId)) {
-                    resultHasChanged = true;
-                    (0, _util.ensureNotFalsy)(currentValue)["delete"](docId);
-                  }
-                }
-              });
-
-              // nothing happened that affects the result -> do not emit
-              if (!resultHasChanged && firstEmitDone) {
-                var _temp12 = false;
-                _exit2 = true;
-                return _temp12;
-              }
-            }
-          }();
-          return Promise.resolve(_temp11 && _temp11.then ? _temp11.then(_temp10) : _temp10(_temp11));
-        } catch (e) {
-          return Promise.reject(e);
-        }
-      });
-      return queue;
-    }), (0, _operators.filter)(function (x) {
-      return !!x;
-    }), (0, _operators.shareReplay)(_util.RXJS_SHARE_REPLAY_DEFAULTS));
+    };
+    var query = (0, _rxQuery.createRxQuery)('findByIds', mangoQuery, this);
+    return query;
   }
 
   /**
    * Export collection to a JSON friendly format.
    */;
   _proto.exportJSON = function exportJSON() {
-    throw (0, _util.pluginMissing)('json-dump');
+    throw (0, _utils.pluginMissing)('json-dump');
   }
 
   /**
@@ -575,62 +368,38 @@ var RxCollectionBase = /*#__PURE__*/function () {
    * @param _exportedJSON The previously exported data from the `<collection>.exportJSON()` method.
    */;
   _proto.importJSON = function importJSON(_exportedJSON) {
-    throw (0, _util.pluginMissing)('json-dump');
+    throw (0, _utils.pluginMissing)('json-dump');
   };
   _proto.insertCRDT = function insertCRDT(_updateObj) {
-    throw (0, _util.pluginMissing)('crdt');
-  }
-
-  /**
-   * sync with a CouchDB endpoint
-   */;
-  _proto.syncCouchDB = function syncCouchDB(_syncOptions) {
-    throw (0, _util.pluginMissing)('replication');
-  }
-
-  /**
-   * sync with a GraphQL endpoint
-   */;
-  _proto.syncGraphQL = function syncGraphQL(_options) {
-    throw (0, _util.pluginMissing)('replication-graphql');
-  };
-  _proto.syncCouchDBNew = function syncCouchDBNew(_syncOptions) {
-    throw (0, _util.pluginMissing)('replication-couchdb-new');
-  };
-  _proto.syncP2P = function syncP2P(_syncOptions) {
-    throw (0, _util.pluginMissing)('replication-p2p');
-  };
-  _proto.syncFirestore = function syncFirestore(_syncOptions) {
-    throw (0, _util.pluginMissing)('replication-firestore');
+    throw (0, _utils.pluginMissing)('crdt');
   }
 
   /**
    * HOOKS
    */;
-  _proto.addHook = function addHook(when, key, fun) {
-    var parallel = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : false;
+  _proto.addHook = function addHook(when, key, fun, parallel = false) {
     if (typeof fun !== 'function') {
       throw (0, _rxError.newRxTypeError)('COL7', {
-        key: key,
-        when: when
+        key,
+        when
       });
     }
     if (!HOOKS_WHEN.includes(when)) {
       throw (0, _rxError.newRxTypeError)('COL8', {
-        key: key,
-        when: when
+        key,
+        when
       });
     }
     if (!HOOKS_KEYS.includes(key)) {
       throw (0, _rxError.newRxError)('COL9', {
-        key: key
+        key
       });
     }
     if (when === 'post' && key === 'create' && parallel === true) {
       throw (0, _rxError.newRxError)('COL10', {
-        when: when,
-        key: key,
-        parallel: parallel
+        when,
+        key,
+        parallel
       });
     }
 
@@ -663,22 +432,14 @@ var RxCollectionBase = /*#__PURE__*/function () {
   _proto._runHooks = function _runHooks(when, key, data, instance) {
     var hooks = this.getHooks(when, key);
     if (!hooks) {
-      return _util.PROMISE_RESOLVE_VOID;
+      return _utils.PROMISE_RESOLVE_VOID;
     }
 
     // run parallel: false
-    var tasks = hooks.series.map(function (hook) {
-      return function () {
-        return hook(data, instance);
-      };
-    });
-    return (0, _util.promiseSeries)(tasks)
+    var tasks = hooks.series.map(hook => () => hook(data, instance));
+    return (0, _utils.promiseSeries)(tasks)
     // run parallel: true
-    .then(function () {
-      return Promise.all(hooks.parallel.map(function (hook) {
-        return hook(data, instance);
-      }));
-    });
+    .then(() => Promise.all(hooks.parallel.map(hook => hook(data, instance))));
   }
 
   /**
@@ -687,9 +448,7 @@ var RxCollectionBase = /*#__PURE__*/function () {
   _proto._runHooksSync = function _runHooksSync(when, key, data, instance) {
     var hooks = this.getHooks(when, key);
     if (!hooks) return;
-    hooks.series.forEach(function (hook) {
-      return hook(data, instance);
-    });
+    hooks.series.forEach(hook => hook(data, instance));
   }
 
   /**
@@ -698,20 +457,18 @@ var RxCollectionBase = /*#__PURE__*/function () {
    * so that no running timeouts prevent the exit of the JavaScript process.
    */;
   _proto.promiseWait = function promiseWait(time) {
-    var _this15 = this;
-    var ret = new Promise(function (res) {
-      var timeout = setTimeout(function () {
-        _this15.timeouts["delete"](timeout);
+    var ret = new Promise(res => {
+      var timeout = setTimeout(() => {
+        this.timeouts.delete(timeout);
         res();
       }, time);
-      _this15.timeouts.add(timeout);
+      this.timeouts.add(timeout);
     });
     return ret;
   };
   _proto.destroy = function destroy() {
-    var _this16 = this;
     if (this.destroyed) {
-      return _util.PROMISE_RESOLVE_FALSE;
+      return _utils.PROMISE_RESOLVE_FALSE;
     }
 
     /**
@@ -721,9 +478,7 @@ var RxCollectionBase = /*#__PURE__*/function () {
      * instead of sending requests to a closed storage.
      */
     this.destroyed = true;
-    Array.from(this.timeouts).forEach(function (timeout) {
-      return clearTimeout(timeout);
-    });
+    Array.from(this.timeouts).forEach(timeout => clearTimeout(timeout));
     if (this._changeEventBuffer) {
       this._changeEventBuffer.destroy();
     }
@@ -735,66 +490,44 @@ var RxCollectionBase = /*#__PURE__*/function () {
      * because it might lead to undefined behavior like when a doc is written
      * but the change is not added to the changes collection.
      */
-    return this.database.requestIdlePromise().then(function () {
-      return Promise.all(_this16.onDestroy.map(function (fn) {
-        return fn();
-      }));
-    }).then(function () {
-      return _this16.storageInstance.close();
-    }).then(function () {
+    return this.database.requestIdlePromise().then(() => Promise.all(this.onDestroy.map(fn => fn()))).then(() => this.storageInstance.close()).then(() => {
       /**
        * Unsubscribing must be done AFTER the storageInstance.close()
        * Because the conflict handling is part of the subscriptions and
        * otherwise there might be open conflicts to be resolved which
        * will then stuck and never resolve.
        */
-      _this16._subs.forEach(function (sub) {
-        return sub.unsubscribe();
-      });
-      delete _this16.database.collections[_this16.name];
-      return (0, _hooks.runAsyncPluginHooks)('postDestroyRxCollection', _this16).then(function () {
-        return true;
-      });
+      this._subs.forEach(sub => sub.unsubscribe());
+      delete this.database.collections[this.name];
+      return (0, _hooks.runAsyncPluginHooks)('postDestroyRxCollection', this).then(() => true);
     });
   }
 
   /**
    * remove all data of the collection
    */;
-  _proto.remove = function remove() {
-    try {
-      var _this18 = this;
-      return Promise.resolve(_this18.destroy()).then(function () {
-        return Promise.resolve((0, _rxCollectionHelper.removeCollectionStorages)(_this18.database.storage, _this18.database.internalStore, _this18.database.token, _this18.database.name, _this18.name, _this18.database.hashFunction)).then(function () {});
-      });
-    } catch (e) {
-      return Promise.reject(e);
-    }
+  _proto.remove = async function remove() {
+    await this.destroy();
+    await (0, _rxCollectionHelper.removeCollectionStorages)(this.database.storage, this.database.internalStore, this.database.token, this.database.name, this.name, this.database.hashFunction);
   };
-  (0, _createClass2["default"])(RxCollectionBase, [{
+  (0, _createClass2.default)(RxCollectionBase, [{
     key: "insert$",
-    get: function get() {
-      return this.$.pipe((0, _operators.filter)(function (cE) {
-        return cE.operation === 'INSERT';
-      }));
+    get: function () {
+      return this.$.pipe((0, _operators.filter)(cE => cE.operation === 'INSERT'));
     }
   }, {
     key: "update$",
-    get: function get() {
-      return this.$.pipe((0, _operators.filter)(function (cE) {
-        return cE.operation === 'UPDATE';
-      }));
+    get: function () {
+      return this.$.pipe((0, _operators.filter)(cE => cE.operation === 'UPDATE'));
     }
   }, {
     key: "remove$",
-    get: function get() {
-      return this.$.pipe((0, _operators.filter)(function (cE) {
-        return cE.operation === 'DELETE';
-      }));
+    get: function () {
+      return this.$.pipe((0, _operators.filter)(cE => cE.operation === 'DELETE'));
     }
   }, {
     key: "asRxCollection",
-    get: function get() {
+    get: function () {
       return this;
     }
   }]);
@@ -809,22 +542,18 @@ function _applyHookFunctions(collection) {
   if (hooksApplied) return; // already run
   hooksApplied = true;
   var colProto = Object.getPrototypeOf(collection);
-  HOOKS_KEYS.forEach(function (key) {
-    HOOKS_WHEN.map(function (when) {
-      var fnName = when + (0, _util.ucfirst)(key);
+  HOOKS_KEYS.forEach(key => {
+    HOOKS_WHEN.map(when => {
+      var fnName = when + (0, _utils.ucfirst)(key);
       colProto[fnName] = function (fun, parallel) {
         return this.addHook(when, key, fun, parallel);
       };
     });
   });
 }
-function _atomicUpsertUpdate(doc, json) {
-  return doc.atomicUpdate(function (_innerDoc) {
+function _incrementalUpsertUpdate(doc, json) {
+  return doc.incrementalModify(_innerDoc => {
     return json;
-  }).then(function () {
-    return (0, _util.nextTick)();
-  }).then(function () {
-    return doc;
   });
 }
 
@@ -832,29 +561,27 @@ function _atomicUpsertUpdate(doc, json) {
  * ensures that the given document exists
  * @return promise that resolves with new doc and flag if inserted
  */
-function _atomicUpsertEnsureRxDocumentExists(rxCollection, primary, json) {
+function _incrementalUpsertEnsureRxDocumentExists(rxCollection, primary, json) {
   /**
    * Optimisation shortcut,
    * first try to find the document in the doc-cache
    */
-  var docFromCache = rxCollection._docCache.get(primary);
-  if (docFromCache) {
+  var docDataFromCache = rxCollection._docCache.getLatestDocumentDataIfExists(primary);
+  if (docDataFromCache) {
     return Promise.resolve({
-      doc: docFromCache,
+      doc: rxCollection._docCache.getCachedRxDocument(docDataFromCache),
       inserted: false
     });
   }
-  return rxCollection.findOne(primary).exec().then(function (doc) {
+  return rxCollection.findOne(primary).exec().then(doc => {
     if (!doc) {
-      return rxCollection.insert(json).then(function (newDoc) {
-        return {
-          doc: newDoc,
-          inserted: true
-        };
-      });
+      return rxCollection.insert(json).then(newDoc => ({
+        doc: newDoc,
+        inserted: true
+      }));
     } else {
       return {
-        doc: doc,
+        doc,
         inserted: false
       };
     }
@@ -864,30 +591,21 @@ function _atomicUpsertEnsureRxDocumentExists(rxCollection, primary, json) {
 /**
  * creates and prepares a new collection
  */
-function createRxCollection(_ref) {
-  var database = _ref.database,
-    name = _ref.name,
-    schema = _ref.schema,
-    _ref$instanceCreation = _ref.instanceCreationOptions,
-    instanceCreationOptions = _ref$instanceCreation === void 0 ? {} : _ref$instanceCreation,
-    _ref$migrationStrateg = _ref.migrationStrategies,
-    migrationStrategies = _ref$migrationStrateg === void 0 ? {} : _ref$migrationStrateg,
-    _ref$autoMigrate = _ref.autoMigrate,
-    autoMigrate = _ref$autoMigrate === void 0 ? true : _ref$autoMigrate,
-    _ref$statics = _ref.statics,
-    statics = _ref$statics === void 0 ? {} : _ref$statics,
-    _ref$methods = _ref.methods,
-    methods = _ref$methods === void 0 ? {} : _ref$methods,
-    _ref$attachments = _ref.attachments,
-    attachments = _ref$attachments === void 0 ? {} : _ref$attachments,
-    _ref$options = _ref.options,
-    options = _ref$options === void 0 ? {} : _ref$options,
-    _ref$localDocuments = _ref.localDocuments,
-    localDocuments = _ref$localDocuments === void 0 ? false : _ref$localDocuments,
-    _ref$cacheReplacement = _ref.cacheReplacementPolicy,
-    cacheReplacementPolicy = _ref$cacheReplacement === void 0 ? _queryCache.defaultCacheReplacementPolicy : _ref$cacheReplacement,
-    _ref$conflictHandler = _ref.conflictHandler,
-    conflictHandler = _ref$conflictHandler === void 0 ? _replicationProtocol.defaultConflictHandler : _ref$conflictHandler;
+function createRxCollection({
+  database,
+  name,
+  schema,
+  instanceCreationOptions = {},
+  migrationStrategies = {},
+  autoMigrate = true,
+  statics = {},
+  methods = {},
+  attachments = {},
+  options = {},
+  localDocuments = false,
+  cacheReplacementPolicy = _queryCache.defaultCacheReplacementPolicy,
+  conflictHandler = _replicationProtocol.defaultConflictHandler
+}) {
   var storageInstanceCreationParams = {
     databaseInstanceToken: database.token,
     databaseName: database.name,
@@ -898,39 +616,35 @@ function createRxCollection(_ref) {
     password: database.password
   };
   (0, _hooks.runPluginHooks)('preCreateRxStorageInstance', storageInstanceCreationParams);
-  return (0, _rxCollectionHelper.createRxCollectionStorageInstance)(database, storageInstanceCreationParams).then(function (storageInstance) {
+  return (0, _rxCollectionHelper.createRxCollectionStorageInstance)(database, storageInstanceCreationParams).then(storageInstance => {
     var collection = new RxCollectionBase(database, name, schema, storageInstance, instanceCreationOptions, migrationStrategies, methods, attachments, options, cacheReplacementPolicy, statics, conflictHandler);
-    return collection.prepare().then(function () {
+    return collection.prepare().then(() => {
       // ORM add statics
-      Object.entries(statics).forEach(function (_ref2) {
-        var funName = _ref2[0],
-          fun = _ref2[1];
+      Object.entries(statics).forEach(([funName, fun]) => {
         Object.defineProperty(collection, funName, {
-          get: function get() {
-            return fun.bind(collection);
-          }
+          get: () => fun.bind(collection)
         });
       });
-      var ret = _util.PROMISE_RESOLVE_VOID;
+      var ret = _utils.PROMISE_RESOLVE_VOID;
       if (autoMigrate && collection.schema.version !== 0) {
         ret = collection.migratePromise();
       }
       return ret;
-    }).then(function () {
+    }).then(() => {
       (0, _hooks.runPluginHooks)('createRxCollection', {
-        collection: collection,
+        collection,
         creator: {
-          name: name,
-          schema: schema,
-          storageInstance: storageInstance,
-          instanceCreationOptions: instanceCreationOptions,
-          migrationStrategies: migrationStrategies,
-          methods: methods,
-          attachments: attachments,
-          options: options,
-          cacheReplacementPolicy: cacheReplacementPolicy,
-          localDocuments: localDocuments,
-          statics: statics
+          name,
+          schema,
+          storageInstance,
+          instanceCreationOptions,
+          migrationStrategies,
+          methods,
+          attachments,
+          options,
+          cacheReplacementPolicy,
+          localDocuments,
+          statics
         }
       });
       return collection;
@@ -938,10 +652,8 @@ function createRxCollection(_ref) {
     /**
      * If the collection creation fails,
      * we yet have to close the storage instances.
-     */["catch"](function (err) {
-      return storageInstance.close().then(function () {
-        return Promise.reject(err);
-      });
+     */.catch(err => {
+      return storageInstance.close().then(() => Promise.reject(err));
     });
   });
 }

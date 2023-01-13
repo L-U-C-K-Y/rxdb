@@ -1,7 +1,8 @@
 import {
     createRxDatabase,
     randomCouchString,
-    overwritable
+    overwritable,
+    requestIdlePromise
 } from '../';
 import * as assert from 'assert';
 import * as schemas from './helper/schemas';
@@ -22,24 +23,20 @@ describe('performance.test.ts', () => {
         );
     });
     it('run the performance test', async function () {
-        this.timeout(120 * 1000);
-        const runs = config.isFastMode() ? 1 : 24;
-
+        this.timeout(200 * 1000);
+        const runs = config.isFastMode() ? 1 : 40;
         const perfStorage = config.storage.getPerformanceStorage();
 
         const totalTimes: { [k: string]: number[]; } = {};
 
         const collectionsAmount = 4;
-        const docsAmount = 600;
+        const docsAmount = 1200;
+        const parallelQueryAmount = 4;
+        const insertBatches = docsAmount / 200;
 
         let runsDone = 0;
         while (runsDone < runs) {
-            /**
-             * Wait a bit to ensure nothing else is running
-             * that would influence the performance.
-             */
-            await wait(200);
-
+            console.log('runsDone: ' + runsDone + ' of ' + runs);
             runsDone++;
 
             let time = performance.now();
@@ -57,6 +54,7 @@ describe('performance.test.ts', () => {
                 time = performance.now();
             };
 
+            await awaitBetweenTest();
             updateTime();
 
             // create database
@@ -100,23 +98,27 @@ describe('performance.test.ts', () => {
              */
             await collection.insert(schemaObjects.averageSchema());
             updateTime('time-to-first-insert');
-            await wait(200);
+            await awaitBetweenTest();
 
-            // insert documents
+            // insert documents (in batches)
             const docIds: string[] = [];
-            const docsData = new Array(docsAmount)
-                .fill(0)
-                .map((_v, idx) => {
-                    const var1 = idx % 2;
-                    const data = schemaObjects.averageSchema({ var1: var1 + '' });
-                    docIds.push(data.id);
-                    return data;
-                });
-
-            updateTime();
-            await collection.bulkInsert(docsData);
-            updateTime('insert-documents');
-            await wait(200);
+            const docsPerBatch = docsAmount / insertBatches;
+            for (let i = 0; i < insertBatches; i++) {
+                const docsData = new Array(docsPerBatch)
+                    .fill(0)
+                    .map((_v, idx) => {
+                        const data = schemaObjects.averageSchema({
+                            var1: (idx % 2) + '',
+                            var2: idx % parallelQueryAmount
+                        });
+                        docIds.push(data.id);
+                        return data;
+                    });
+                updateTime();
+                await collection.bulkInsert(docsData);
+                updateTime('insert-documents-' + docsPerBatch);
+                await awaitBetweenTest();
+            }
 
             /**
              * Find by id,
@@ -129,22 +131,39 @@ describe('performance.test.ts', () => {
             const idsResult = await collection.storageInstance.findDocumentsById(docIds, false);
             updateTime('find-by-ids');
             assert.strictEqual(Object.keys(idsResult).length, docsAmount);
-            await wait(200);
+            await awaitBetweenTest();
 
             // find by query
             updateTime();
             const query = collection.find({
-                selector: {
-                    var1: {
-                        $gt: ''
-                    }
-                },
-                sort: [{ var1: 'asc' }]
+                selector: {},
+                sort: [
+                    { var2: 'asc' },
+                    { var1: 'asc' }
+                ]
             });
             const queryResult = await query.exec();
             updateTime('find-by-query');
             assert.strictEqual(queryResult.length, docsAmount + 1);
+            await awaitBetweenTest();
 
+            // find by multiple queries in parallel
+            updateTime();
+            const parallelResult = await Promise.all(
+                new Array(parallelQueryAmount).fill(0).map((_v, idx) => {
+                    const subQuery = collection.find({
+                        selector: {
+                            var2: idx
+                        }
+                    });
+                    return subQuery.exec();
+                })
+            );
+            updateTime('find-by-query-parallel-' + parallelQueryAmount);
+            let parallelSum = 0;
+            parallelResult.forEach(r => parallelSum = parallelSum + r.length);
+            assert.strictEqual(parallelSum, docsAmount);
+            await awaitBetweenTest();
 
             // run count query
             updateTime();
@@ -171,7 +190,7 @@ describe('performance.test.ts', () => {
             docsAmount
         };
         Object.entries(totalTimes).forEach(([key, times]) => {
-            timeToLog[key] = averageOfTimeValues(times, 50);
+            timeToLog[key] = averageOfTimeValues(times, 90);
         });
 
         console.log('Performance test for ' + perfStorage.description);
@@ -196,4 +215,11 @@ export function averageOfTimeValues(
     let total = 0;
     useNumbers.forEach(nr => total = total + nr);
     return total / useNumbers.length;
+}
+
+
+async function awaitBetweenTest() {
+    await requestIdlePromise();
+    await wait(100);
+    await requestIdlePromise();
 }

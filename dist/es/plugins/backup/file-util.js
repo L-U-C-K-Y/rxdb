@@ -1,36 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { blobBufferUtil, now } from '../../util';
+import { blobBufferUtil, now } from '../../plugins/utils';
 
 /**
  * ensure that the given folder exists
  */
-
-export var writeToFile = function writeToFile(location, data) {
-  try {
-    var _temp3 = function _temp3() {
-      return new Promise(function (res, rej) {
-        fs.writeFile(location, data, 'utf-8', function (err) {
-          if (err) {
-            rej(err);
-          } else {
-            res();
-          }
-        });
-      });
-    };
-    var _temp4 = function () {
-      if (typeof data !== 'string') {
-        return Promise.resolve(blobBufferUtil.toString(data)).then(function (_blobBufferUtil$toStr) {
-          data = _blobBufferUtil$toStr;
-        });
-      }
-    }();
-    return Promise.resolve(_temp4 && _temp4.then ? _temp4.then(_temp3) : _temp3(_temp4));
-  } catch (e) {
-    return Promise.reject(e);
-  }
-};
 export function ensureFolderExists(folderPath) {
   if (!fs.existsSync(folderPath)) {
     fs.mkdirSync(folderPath, {
@@ -66,8 +40,22 @@ export function prepareFolders(database, options) {
     };
     fs.writeFileSync(metaLoc, JSON.stringify(metaData), 'utf-8');
   }
-  Object.keys(database.collections).forEach(function (collectionName) {
+  Object.keys(database.collections).forEach(collectionName => {
     ensureFolderExists(path.join(options.directory, collectionName));
+  });
+}
+export async function writeToFile(location, data) {
+  if (typeof data !== 'string') {
+    data = await blobBufferUtil.toString(data);
+  }
+  return new Promise(function (res, rej) {
+    fs.writeFile(location, data, 'utf-8', err => {
+      if (err) {
+        rej(err);
+      } else {
+        res();
+      }
+    });
   });
 }
 export function writeJsonToFile(location, data) {
@@ -78,8 +66,8 @@ export function metaFileLocation(options) {
 }
 export function getMeta(options) {
   var loc = metaFileLocation(options);
-  return new Promise(function (res, rej) {
-    fs.readFile(loc, 'utf-8', function (err, data) {
+  return new Promise((res, rej) => {
+    fs.readFile(loc, 'utf-8', (err, data) => {
       if (err) {
         rej(err);
       } else {

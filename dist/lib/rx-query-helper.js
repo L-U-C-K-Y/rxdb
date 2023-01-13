@@ -6,21 +6,21 @@ Object.defineProperty(exports, "__esModule", {
 exports.normalizeMangoQuery = normalizeMangoQuery;
 var _queryPlanner = require("./query-planner");
 var _rxSchemaHelper = require("./rx-schema-helper");
-var _util = require("./util");
+var _utils = require("./plugins/utils");
 /**
  * Normalize the query to ensure we have all fields set
  * and queries that represent the same query logic are detected as equal by the caching.
  */
 function normalizeMangoQuery(schema, mangoQuery) {
   var primaryKey = (0, _rxSchemaHelper.getPrimaryFieldOfPrimaryKey)(schema.primaryKey);
-  var normalizedMangoQuery = (0, _util.flatClone)(mangoQuery);
+  var normalizedMangoQuery = (0, _utils.clone)(mangoQuery);
   if (typeof normalizedMangoQuery.skip !== 'number') {
     normalizedMangoQuery.skip = 0;
   }
   if (!normalizedMangoQuery.selector) {
     normalizedMangoQuery.selector = {};
   } else {
-    normalizedMangoQuery.selector = (0, _util.flatClone)(normalizedMangoQuery.selector);
+    normalizedMangoQuery.selector = normalizedMangoQuery.selector;
     /**
      * In mango query, it is possible to have an
      * equals comparison by directly assigning a value
@@ -31,10 +31,12 @@ function normalizeMangoQuery(schema, mangoQuery) {
      * }
      * For normalization, we have to normalize this
      * so our checks can perform properly.
+     *
+     *
+     * TODO this must work recursive with nested queries that
+     * contain multiple selectors via $and or $or etc.
      */
-    Object.entries(normalizedMangoQuery.selector).forEach(function (_ref) {
-      var field = _ref[0],
-        matcher = _ref[1];
+    Object.entries(normalizedMangoQuery.selector).forEach(([field, matcher]) => {
       if (typeof matcher !== 'object' || matcher === null) {
         normalizedMangoQuery.selector[field] = {
           $eq: matcher
@@ -48,7 +50,7 @@ function normalizeMangoQuery(schema, mangoQuery) {
    * the primaryKey is inside of it.
    */
   if (normalizedMangoQuery.index) {
-    var indexAr = Array.isArray(normalizedMangoQuery.index) ? normalizedMangoQuery.index.slice(0) : [normalizedMangoQuery.index];
+    var indexAr = (0, _utils.toArray)(normalizedMangoQuery.index);
     if (!indexAr.includes(primaryKey)) {
       indexAr.push(primaryKey);
     }
@@ -73,9 +75,10 @@ function normalizeMangoQuery(schema, mangoQuery) {
      * which has a bad performance in most cases.
      */
     if (normalizedMangoQuery.index) {
-      normalizedMangoQuery.sort = normalizedMangoQuery.index.map(function (field) {
-        var _ref2;
-        return _ref2 = {}, _ref2[field] = 'asc', _ref2;
+      normalizedMangoQuery.sort = normalizedMangoQuery.index.map(field => {
+        return {
+          [field]: 'asc'
+        };
       });
     } else {
       /**
@@ -83,14 +86,10 @@ function normalizeMangoQuery(schema, mangoQuery) {
        */
       if (schema.indexes) {
         var fieldsWithLogicalOperator = new Set();
-        Object.entries(normalizedMangoQuery.selector).forEach(function (_ref3) {
-          var field = _ref3[0],
-            matcher = _ref3[1];
+        Object.entries(normalizedMangoQuery.selector).forEach(([field, matcher]) => {
           var hasLogical = false;
           if (typeof matcher === 'object' && matcher !== null) {
-            hasLogical = !!Object.keys(matcher).find(function (operator) {
-              return _queryPlanner.LOGICAL_OPERATORS.has(operator);
-            });
+            hasLogical = !!Object.keys(matcher).find(operator => _queryPlanner.LOGICAL_OPERATORS.has(operator));
           } else {
             hasLogical = true;
           }
@@ -100,20 +99,19 @@ function normalizeMangoQuery(schema, mangoQuery) {
         });
         var currentFieldsAmount = -1;
         var currentBestIndexForSort;
-        schema.indexes.forEach(function (index) {
-          var useIndex = (0, _util.isMaybeReadonlyArray)(index) ? index : [index];
-          var firstWrongIndex = useIndex.findIndex(function (indexField) {
-            return !fieldsWithLogicalOperator.has(indexField);
-          });
+        schema.indexes.forEach(index => {
+          var useIndex = (0, _utils.isMaybeReadonlyArray)(index) ? index : [index];
+          var firstWrongIndex = useIndex.findIndex(indexField => !fieldsWithLogicalOperator.has(indexField));
           if (firstWrongIndex > 0 && firstWrongIndex > currentFieldsAmount) {
             currentFieldsAmount = firstWrongIndex;
             currentBestIndexForSort = useIndex;
           }
         });
         if (currentBestIndexForSort) {
-          normalizedMangoQuery.sort = currentBestIndexForSort.map(function (field) {
-            var _ref4;
-            return _ref4 = {}, _ref4[field] = 'asc', _ref4;
+          normalizedMangoQuery.sort = currentBestIndexForSort.map(field => {
+            return {
+              [field]: 'asc'
+            };
           });
         }
       }
@@ -123,18 +121,18 @@ function normalizeMangoQuery(schema, mangoQuery) {
        * if no better one has been found
        */
       if (!normalizedMangoQuery.sort) {
-        var _ref5;
-        normalizedMangoQuery.sort = [(_ref5 = {}, _ref5[primaryKey] = 'asc', _ref5)];
+        normalizedMangoQuery.sort = [{
+          [primaryKey]: 'asc'
+        }];
       }
     }
   } else {
-    var isPrimaryInSort = normalizedMangoQuery.sort.find(function (p) {
-      return (0, _util.firstPropertyNameOfObject)(p) === primaryKey;
-    });
+    var isPrimaryInSort = normalizedMangoQuery.sort.find(p => (0, _utils.firstPropertyNameOfObject)(p) === primaryKey);
     if (!isPrimaryInSort) {
-      var _normalizedMangoQuery;
       normalizedMangoQuery.sort = normalizedMangoQuery.sort.slice(0);
-      normalizedMangoQuery.sort.push((_normalizedMangoQuery = {}, _normalizedMangoQuery[primaryKey] = 'asc', _normalizedMangoQuery));
+      normalizedMangoQuery.sort.push({
+        [primaryKey]: 'asc'
+      });
     }
   }
   return normalizedMangoQuery;

@@ -1,4 +1,3 @@
-import objectPath from 'object-path';
 import { newRxError } from './rx-error';
 import type {
     CompositePrimaryKey,
@@ -10,7 +9,16 @@ import type {
     RxStorageDefaultCheckpoint,
     StringKeys
 } from './types';
-import { clone, flatClone, isMaybeReadonlyArray, RX_META_LWT_MINIMUM, sortObject, trimDots } from './util';
+import {
+    flatClone,
+    getProperty,
+    isMaybeReadonlyArray,
+    REGEX_ALL_DOTS,
+    RX_META_LWT_MINIMUM,
+    sortObject,
+    trimDots
+} from './plugins/utils';
+import type { RxSchema } from './rx-schema';
 
 /**
  * Helper function to create a valid RxJsonSchema
@@ -43,11 +51,11 @@ export function getSchemaByObjectPath<T = any>(
     path: keyof T | string
 ): JsonSchema {
     let usePath: string = path as string;
-    usePath = usePath.replace(/\./g, '.properties.');
+    usePath = usePath.replace(REGEX_ALL_DOTS, '.properties.');
     usePath = 'properties.' + usePath;
     usePath = trimDots(usePath);
 
-    const ret = objectPath.get(rxJsonSchema, usePath);
+    const ret = getProperty(rxJsonSchema, usePath);
     return ret;
 }
 
@@ -56,7 +64,11 @@ export function fillPrimaryKey<T>(
     jsonSchema: RxJsonSchema<T>,
     documentData: RxDocumentData<T>
 ): RxDocumentData<T> {
-    const cloned = flatClone(documentData);
+    // optimization shortcut.
+    if (typeof jsonSchema.primaryKey === 'string') {
+        return documentData;
+    }
+
     const newPrimary = getComposedPrimaryKeyOfDocumentData<T>(
         jsonSchema,
         documentData
@@ -78,8 +90,8 @@ export function fillPrimaryKey<T>(
             });
     }
 
-    (cloned as any)[primaryPath] = newPrimary;
-    return cloned;
+    (documentData as any)[primaryPath] = newPrimary;
+    return documentData;
 }
 
 export function getPrimaryFieldOfPrimaryKey<RxDocType>(
@@ -105,7 +117,7 @@ export function getComposedPrimaryKeyOfDocumentData<RxDocType>(
 
     const compositePrimary: CompositePrimaryKey<RxDocType> = jsonSchema.primaryKey as any;
     return compositePrimary.fields.map(field => {
-        const value = objectPath.get(documentData as any, field as string);
+        const value = getProperty(documentData as any, field as string);
         if (typeof value === 'undefined') {
             throw newRxError('DOC18', { args: { field, documentData } });
         }
@@ -127,24 +139,7 @@ export function getComposedPrimaryKeyOfDocumentData<RxDocType>(
  * @return RxJsonSchema - ordered and filled
  */
 export function normalizeRxJsonSchema<T>(jsonSchema: RxJsonSchema<T>): RxJsonSchema<T> {
-    // TODO do we need the deep clone() here?
-    const normalizedSchema: RxJsonSchema<T> = sortObject(clone(jsonSchema));
-
-    // indexes must NOT be sorted because sort order is important here.
-    if (jsonSchema.indexes) {
-        normalizedSchema.indexes = Array.from(jsonSchema.indexes);
-    }
-
-    // primaryKey.fields must NOT be sorted because sort order is important here.
-    if (
-        typeof normalizedSchema.primaryKey === 'object' &&
-        typeof jsonSchema.primaryKey === 'object'
-    ) {
-        normalizedSchema.primaryKey.fields = jsonSchema.primaryKey.fields;
-    }
-
-
-
+    const normalizedSchema: RxJsonSchema<T> = sortObject(jsonSchema, true);
     return normalizedSchema;
 }
 
@@ -176,10 +171,6 @@ export function fillWithDefaultSettings<T = any>(
     // encrypted must be array
     schemaObj.encrypted = schemaObj.encrypted ? schemaObj.encrypted.slice(0) : [];
 
-    /**
-     * TODO we should not need to add the internal fields to the schema.
-     * Better remove the fields before validation.
-     */
     // add _rev
     (schemaObj.properties as any)._rev = {
         type: 'string',
@@ -289,6 +280,20 @@ export function getFinalFields<T = any>(
     return ret;
 }
 
+/**
+ * fills all unset fields with default-values if set
+ * @hotPath
+ */
+export function fillObjectWithDefaults(rxSchema: RxSchema<any>, obj: any): any {
+    const defaultKeys = Object.keys(rxSchema.defaultValues);
+    for (let i = 0; i < defaultKeys.length; ++i) {
+        const key = defaultKeys[i];
+        if (!obj.hasOwnProperty(key) || typeof obj[key] === 'undefined') {
+            obj[key] = rxSchema.defaultValues[key];
+        }
+    }
+    return obj;
+}
 
 export const DEFAULT_CHECKPOINT_SCHEMA: DeepReadonly<JsonSchema<RxStorageDefaultCheckpoint>> = {
     type: 'object',

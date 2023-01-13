@@ -25,7 +25,12 @@ import {
     ensureNotFalsy,
     randomCouchString,
     rxStorageInstanceToReplicationHandler,
-    normalizeMangoQuery
+    normalizeMangoQuery,
+    RxError,
+    RxTypeError,
+    createRxDatabase,
+    RxReplicationPullStreamItem,
+    lastOfArray
 } from '../../';
 
 import {
@@ -37,6 +42,7 @@ import type {
     ReplicationPushHandler,
     RxReplicationWriteToMasterRow
 } from '../../src/types';
+import { Subject } from 'rxjs';
 
 
 type CheckpointType = any;
@@ -67,7 +73,7 @@ describe('replication.test.js', () => {
         const helper = rxStorageInstanceToReplicationHandler(
             remoteCollection.storageInstance,
             remoteCollection.database.conflictHandler as any,
-            remoteCollection.database.hashFunction
+            remoteCollection.database.token
         );
         const handler: ReplicationPullHandler<TestDocType, CheckpointType> = async (
             latestPullCheckpoint: CheckpointType | null,
@@ -84,7 +90,7 @@ describe('replication.test.js', () => {
         const helper = rxStorageInstanceToReplicationHandler(
             remoteCollection.storageInstance,
             remoteCollection.conflictHandler,
-            remoteCollection.database.hashFunction
+            remoteCollection.database.token
         );
         const handler: ReplicationPushHandler<TestDocType> = async (
             rows: RxReplicationWriteToMasterRow<TestDocType>[]
@@ -200,7 +206,8 @@ describe('replication.test.js', () => {
             remoteCollection.database.destroy();
         });
         it('should not save pulled documents that do not match the schema', async () => {
-            const { localCollection, remoteCollection } = await getTestCollections({ local: 0, remote: 5 });
+            const amount = 5;
+            const { localCollection, remoteCollection } = await getTestCollections({ local: 0, remote: amount });
 
             /**
              * Use collection with different schema
@@ -227,7 +234,7 @@ describe('replication.test.js', () => {
                     handler: getPushHandler(remoteCollection)
                 }
             });
-            const errors: any[] = [];
+            const errors: (RxError | RxTypeError)[] = [];
             replicationState.error$.subscribe(err => errors.push(err));
             await replicationState.awaitInitialReplication();
 
@@ -237,8 +244,8 @@ describe('replication.test.js', () => {
             assert.strictEqual(docsLocal.length, 0);
 
 
-            assert.strictEqual(errors.length, 1);
-            assert.ok(errors[0].message.includes('does not match schema'));
+            assert.strictEqual(errors.length, amount);
+            assert.ok(JSON.stringify(errors[0].parameters).includes('maximum'));
 
 
             localCollection.database.destroy();
@@ -274,14 +281,14 @@ describe('replication.test.js', () => {
             const docData = schemaObjects.humanWithTimestamp({
                 id
             });
-            const doc = await localCollection.insert(docData);
+            let doc = await localCollection.insert(docData);
             await waitUntil(async () => {
                 const remoteDoc = await docsRemoteQuery.exec();
                 return !!remoteDoc;
             });
 
             // UPDATE
-            await doc.atomicPatch({
+            doc = await doc.incrementalPatch({
                 age: 100
             });
             await waitUntil(async () => {
@@ -566,6 +573,56 @@ describe('replication.test.js', () => {
         });
     });
     config.parallel('issues', () => {
+        it('#4190 Composite Primary Keys broken on replicated collections', async () => {
+            const db = await createRxDatabase({
+                name: randomCouchString(10),
+                storage: config.storage.getStorage(),
+                eventReduce: true,
+                ignoreDuplicate: true
+            });
+            const collections = await db.addCollections({
+                mycollection: {
+                    schema: schemas.humanCompositePrimary
+                }
+            });
+            const mycollection: RxCollection<schemaObjects.HumanWithCompositePrimary> = collections.mycollection;
 
+            const pullStream$ = new Subject<RxReplicationPullStreamItem<any, CheckpointType>>();
+            let fetched = false;
+            const replicationState = replicateRxCollection({
+                replicationIdentifier: 'replicate-' + randomCouchString(10),
+                collection: mycollection,
+                pull: {
+                    // eslint-disable-next-line require-await
+                    handler: async (lastCheckpoint) => {
+                        const docs: schemaObjects.HumanWithCompositePrimary[] = (fetched) ?
+                            [] :
+                            [schemaObjects.humanWithCompositePrimary()];
+                        fetched = true;
+                        const lastDoc = lastOfArray(docs);
+                        return {
+                            documents: docs,
+                            checkpoint: !lastDoc
+                                ? lastCheckpoint
+                                : {
+                                    id: mycollection.schema.getPrimaryOfDocumentData(lastDoc),
+                                    updatedAt: new Date().getTime()
+                                }
+                        };
+                    },
+                    batchSize: 1,
+                    stream$: pullStream$.asObservable()
+                },
+            });
+
+            replicationState.error$.subscribe((err) => {
+                throw Error(err.message);
+            });
+
+            await replicationState.awaitInitialReplication();
+
+            // clean up afterwards
+            db.destroy();
+        });
     });
 });

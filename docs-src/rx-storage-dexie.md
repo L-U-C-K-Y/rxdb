@@ -6,9 +6,6 @@ Dexie.js is a minimal wrapper around IndexedDB.
 For the Dexie based `RxStorage`, we use the [mingo](https://github.com/kofrasa/mingo) query handler.
 
 ## Pros 
-  - Smaller bundle size than with the PouchDB storage.
-  - Fast initial load even on big datasets.
-  - Faster write and read performance than with PouchDB because it has less overhead.
   - Can use [Dexie.js addons](https://dexie.org/docs/Tutorial/Building-Addons).
 
 ## Cons
@@ -20,7 +17,7 @@ For the Dexie based `RxStorage`, we use the [mingo](https://github.com/kofrasa/m
 
 ```ts
 import { createRxDatabase } from 'rxdb';
-import { getRxStorageDexie } from 'rxdb/plugins/dexie';
+import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 
 const db = await createRxDatabase({
     name: 'exampledb',
@@ -36,7 +33,7 @@ You can do that by using the [fake-indexeddb](https://github.com/dumbmatter/fake
 
 ```ts
 import { createRxDatabase } from 'rxdb';
-import { getRxStorageDexie } from 'rxdb/plugins/dexie';
+import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 
 //> npm install fake-indexeddb --save
 const fakeIndexedDB = require('fake-indexeddb');

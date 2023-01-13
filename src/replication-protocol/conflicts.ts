@@ -1,4 +1,3 @@
-import deepEqual from 'fast-deep-equal';
 import type {
     RxConflictHandler,
     RxConflictHandlerInput,
@@ -10,8 +9,9 @@ import {
     getDefaultRevision,
     createRevision,
     now,
-    flatClone
-} from '../util';
+    flatClone,
+    deepEqual
+} from '../plugins/utils';
 
 export const defaultConflictHandler: RxConflictHandler<any> = function (
     i: RxConflictHandlerInput<any>,
@@ -57,9 +57,9 @@ export async function resolveConflictError<RxDocType>(
     input: RxConflictHandlerInput<RxDocType>,
     forkState: RxDocumentData<RxDocType>
 ): Promise<{
-        resolvedDoc: RxDocumentData<RxDocType>;
-        output: RxConflictHandlerOutput<RxDocType>;
-    } | undefined> {
+    resolvedDoc: RxDocumentData<RxDocType>;
+    output: RxConflictHandlerOutput<RxDocType>;
+} | undefined> {
     const conflictHandler: RxConflictHandler<RxDocType> = state.input.conflictHandler;
     const conflictHandlerOutput = await conflictHandler(input, 'replication-resolve-conflict');
 
@@ -89,8 +89,7 @@ export async function resolveConflictError<RxDocType>(
         );
         resolvedDoc._meta.lwt = now();
         resolvedDoc._rev = createRevision(
-            state.input.hashFunction,
-            resolvedDoc,
+            state.input.identifier,
             forkState
         );
         return {

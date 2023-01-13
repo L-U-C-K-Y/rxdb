@@ -1,6 +1,6 @@
 import { createQueryBuilder, OTHER_MANGO_ATTRIBUTES, OTHER_MANGO_OPERATORS } from './mquery/nosql-query-builder';
 import { RxQueryBase, tunnelQueryCache } from '../../rx-query';
-import { clone } from '../../util';
+import { clone } from '../../plugins/utils';
 import { runPluginHooks } from '../../hooks';
 
 // if the query-builder plugin is used, we have to save its last path
@@ -35,14 +35,14 @@ export var RxDBQueryBuilderPlugin = {
   name: 'query-builder',
   rxdb: true,
   prototypes: {
-    RxQuery: function RxQuery(proto) {
-      ['where', 'equals', 'eq', 'or', 'nor', 'and', 'mod', 'exists', 'elemMatch', 'sort'].forEach(function (attribute) {
+    RxQuery(proto) {
+      ['where', 'equals', 'eq', 'or', 'nor', 'and', 'mod', 'exists', 'elemMatch', 'sort'].forEach(attribute => {
         applyBuildingStep(proto, attribute);
       });
-      OTHER_MANGO_ATTRIBUTES.forEach(function (attribute) {
+      OTHER_MANGO_ATTRIBUTES.forEach(attribute => {
         applyBuildingStep(proto, attribute);
       });
-      OTHER_MANGO_OPERATORS.forEach(function (operator) {
+      OTHER_MANGO_OPERATORS.forEach(operator => {
         applyBuildingStep(proto, operator);
       });
     }

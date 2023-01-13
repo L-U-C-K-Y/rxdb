@@ -58,7 +58,7 @@ export const humanSchemaLiteral = overwritable.deepFreezeWhenDevMode({
             multipleOf: 1
         }
     },
-    required: ['firstName', 'lastName', 'passportId'],
+    required: ['firstName', 'lastName', 'passportId', 'age'],
     indexes: ['firstName']
 } as const);
 const humanSchemaTyped = toTypedRxJsonSchema(humanSchemaLiteral);
@@ -79,10 +79,12 @@ export const humanDefault: RxJsonSchema<HumanDocumentType> = overwritable.deepFr
             maxLength: 100
         },
         firstName: {
-            type: 'string'
+            type: 'string',
+            maxLength: 100
         },
         lastName: {
-            type: 'string'
+            type: 'string',
+            maxLength: 100
         },
         age: {
             description: 'age in years',
@@ -292,15 +294,18 @@ export const nestedHuman: RxJsonSchema<NestedHumanDocumentType> = {
             type: 'object',
             properties: {
                 name: {
-                    type: 'string'
+                    type: 'string',
+                    maxLength: 10
                 },
                 level: {
                     type: 'number',
                     minimum: 0,
-                    maximum: 10
+                    maximum: 10,
+                    multipleOf: 1
                 }
             },
-            required: ['name', 'level']
+            required: ['name', 'level'],
+            additionalProperties: false
         }
     },
     required: ['firstName'],
@@ -955,6 +960,7 @@ export function averageSchema(): RxJsonSchema<AverageSchemaDocumentType> {
         ],
         indexes: [
             'var1',
+            'var2',
             'deep.deep1',
             // one compound index
             [

@@ -18,7 +18,7 @@ Object.keys(_checkSchema).forEach(function (key) {
   if (key in exports && exports[key] === _checkSchema[key]) return;
   Object.defineProperty(exports, key, {
     enumerable: true,
-    get: function get() {
+    get: function () {
       return _checkSchema[key];
     }
   });
@@ -32,7 +32,7 @@ Object.keys(_unallowedProperties).forEach(function (key) {
   if (key in exports && exports[key] === _unallowedProperties[key]) return;
   Object.defineProperty(exports, key, {
     enumerable: true,
-    get: function get() {
+    get: function () {
       return _unallowedProperties[key];
     }
   });
@@ -44,13 +44,13 @@ Object.keys(_checkQuery).forEach(function (key) {
   if (key in exports && exports[key] === _checkQuery[key]) return;
   Object.defineProperty(exports, key, {
     enumerable: true,
-    get: function get() {
+    get: function () {
       return _checkQuery[key];
     }
   });
 });
 var _rxError = require("../../rx-error");
-var _util = require("../../util");
+var _utils = require("../../plugins/utils");
 /**
  * Deep freezes and object when in dev-mode.
  * Deep-Freezing has the same performaance as deep-cloning, so we only do that in dev-mode.
@@ -62,7 +62,7 @@ function deepFreezeWhenDevMode(obj) {
   if (!obj || typeof obj === 'string' || typeof obj === 'number') {
     return obj;
   }
-  return (0, _util.deepFreeze)(obj);
+  return (0, _utils.deepFreeze)(obj);
 }
 var DEV_MODE_PLUGIN_NAME = 'dev-mode';
 exports.DEV_MODE_PLUGIN_NAME = DEV_MODE_PLUGIN_NAME;
@@ -70,11 +70,11 @@ var RxDBDevModePlugin = {
   name: DEV_MODE_PLUGIN_NAME,
   rxdb: true,
   overwritable: {
-    isDevMode: function isDevMode() {
+    isDevMode() {
       return true;
     },
-    deepFreezeWhenDevMode: deepFreezeWhenDevMode,
-    tunnelErrorMessage: function tunnelErrorMessage(code) {
+    deepFreezeWhenDevMode,
+    tunnelErrorMessage(code) {
       if (!_errorMessages.ERROR_MESSAGES[code]) {
         console.error('RxDB: Error-Code not known: ' + code);
         throw new Error('Error-Code ' + code + ' not known, contact the maintainer');
@@ -87,12 +87,12 @@ var RxDBDevModePlugin = {
       after: _checkSchema.checkSchema
     },
     preCreateRxDatabase: {
-      after: function after(args) {
+      after: function (args) {
         (0, _unallowedProperties.ensureDatabaseNameIsValid)(args);
       }
     },
     preCreateRxCollection: {
-      after: function after(args) {
+      after: function (args) {
         (0, _unallowedProperties.ensureCollectionNameValid)(args);
         (0, _checkOrm.checkOrmDocumentMethods)(args.schema, args.methods);
         if (args.name.charAt(0) === '_') {
@@ -103,23 +103,23 @@ var RxDBDevModePlugin = {
         if (!args.schema) {
           throw (0, _rxError.newRxError)('DB4', {
             name: args.name,
-            args: args
+            args
           });
         }
       }
     },
     preCreateRxQuery: {
-      after: function after(args) {
+      after: function (args) {
         (0, _checkQuery.checkQuery)(args);
       }
     },
     prePrepareQuery: {
-      after: function after(args) {
+      after: args => {
         (0, _checkQuery.checkMangoQuery)(args);
       }
     },
     createRxCollection: {
-      after: function after(args) {
+      after: args => {
         // check ORM-methods
         (0, _checkOrm.checkOrmMethods)(args.creator.statics);
         (0, _checkOrm.checkOrmMethods)(args.creator.methods);

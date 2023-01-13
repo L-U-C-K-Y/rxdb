@@ -1,190 +1,13 @@
-import objectPath from 'object-path';
-import { BehaviorSubject } from 'rxjs';
-import { distinctUntilChanged, map } from 'rxjs/operators';
-import { clone, trimDots, getHeightOfRevision, pluginMissing, flatClone, PROMISE_RESOLVE_NULL, PROMISE_RESOLVE_VOID, ensureNotFalsy } from './util';
-import { newRxError, isBulkWriteConflictError } from './rx-error';
+import { distinctUntilChanged, filter, map, shareReplay, startWith } from 'rxjs/operators';
+import { clone, trimDots, pluginMissing, flatClone, PROMISE_RESOLVE_NULL, RXJS_SHARE_REPLAY_DEFAULTS, getFromObjectOrThrow, getProperty } from './plugins/utils';
+import { newRxError } from './rx-error';
 import { runPluginHooks } from './hooks';
 import { getDocumentDataOfRxChangeEvent } from './rx-change-event';
 import { overwritable } from './overwritable';
 import { getSchemaByObjectPath } from './rx-schema-helper';
 import { throwIfIsStorageWriteError } from './rx-storage-helper';
-function _catch(body, recover) {
-  try {
-    var result = body();
-  } catch (e) {
-    return recover(e);
-  }
-  if (result && result.then) {
-    return result.then(void 0, recover);
-  }
-  return result;
-}
-function _settle(pact, state, value) {
-  if (!pact.s) {
-    if (value instanceof _Pact) {
-      if (value.s) {
-        if (state & 1) {
-          state = value.s;
-        }
-        value = value.v;
-      } else {
-        value.o = _settle.bind(null, pact, state);
-        return;
-      }
-    }
-    if (value && value.then) {
-      value.then(_settle.bind(null, pact, state), _settle.bind(null, pact, 2));
-      return;
-    }
-    pact.s = state;
-    pact.v = value;
-    var observer = pact.o;
-    if (observer) {
-      observer(pact);
-    }
-  }
-}
-var _Pact = /*#__PURE__*/function () {
-  function _Pact() {}
-  _Pact.prototype.then = function (onFulfilled, onRejected) {
-    var result = new _Pact();
-    var state = this.s;
-    if (state) {
-      var callback = state & 1 ? onFulfilled : onRejected;
-      if (callback) {
-        try {
-          _settle(result, 1, callback(this.v));
-        } catch (e) {
-          _settle(result, 2, e);
-        }
-        return result;
-      } else {
-        return this;
-      }
-    }
-    this.o = function (_this) {
-      try {
-        var value = _this.v;
-        if (_this.s & 1) {
-          _settle(result, 1, onFulfilled ? onFulfilled(value) : value);
-        } else if (onRejected) {
-          _settle(result, 1, onRejected(value));
-        } else {
-          _settle(result, 2, value);
-        }
-      } catch (e) {
-        _settle(result, 2, e);
-      }
-    };
-    return result;
-  };
-  return _Pact;
-}();
-function _isSettledPact(thenable) {
-  return thenable instanceof _Pact && thenable.s & 1;
-}
-function _for(test, update, body) {
-  var stage;
-  for (;;) {
-    var shouldContinue = test();
-    if (_isSettledPact(shouldContinue)) {
-      shouldContinue = shouldContinue.v;
-    }
-    if (!shouldContinue) {
-      return result;
-    }
-    if (shouldContinue.then) {
-      stage = 0;
-      break;
-    }
-    var result = body();
-    if (result && result.then) {
-      if (_isSettledPact(result)) {
-        result = result.s;
-      } else {
-        stage = 1;
-        break;
-      }
-    }
-    if (update) {
-      var updateValue = update();
-      if (updateValue && updateValue.then && !_isSettledPact(updateValue)) {
-        stage = 2;
-        break;
-      }
-    }
-  }
-  var pact = new _Pact();
-  var reject = _settle.bind(null, pact, 2);
-  (stage === 0 ? shouldContinue.then(_resumeAfterTest) : stage === 1 ? result.then(_resumeAfterBody) : updateValue.then(_resumeAfterUpdate)).then(void 0, reject);
-  return pact;
-  function _resumeAfterBody(value) {
-    result = value;
-    do {
-      if (update) {
-        updateValue = update();
-        if (updateValue && updateValue.then && !_isSettledPact(updateValue)) {
-          updateValue.then(_resumeAfterUpdate).then(void 0, reject);
-          return;
-        }
-      }
-      shouldContinue = test();
-      if (!shouldContinue || _isSettledPact(shouldContinue) && !shouldContinue.v) {
-        _settle(pact, 1, result);
-        return;
-      }
-      if (shouldContinue.then) {
-        shouldContinue.then(_resumeAfterTest).then(void 0, reject);
-        return;
-      }
-      result = body();
-      if (_isSettledPact(result)) {
-        result = result.v;
-      }
-    } while (!result || !result.then);
-    result.then(_resumeAfterBody).then(void 0, reject);
-  }
-  function _resumeAfterTest(shouldContinue) {
-    if (shouldContinue) {
-      result = body();
-      if (result && result.then) {
-        result.then(_resumeAfterBody).then(void 0, reject);
-      } else {
-        _resumeAfterBody(result);
-      }
-    } else {
-      _settle(pact, 1, result);
-    }
-  }
-  function _resumeAfterUpdate() {
-    if (shouldContinue = test()) {
-      if (shouldContinue.then) {
-        shouldContinue.then(_resumeAfterTest).then(void 0, reject);
-      } else {
-        _resumeAfterTest(shouldContinue);
-      }
-    } else {
-      _settle(pact, 1, result);
-    }
-  }
-}
+import { modifierFromPublicToInternal } from './incremental-write';
 export var basePrototype = {
-  /**
-   * TODO
-   * instead of appliying the _this-hack
-   * we should make these accessors functions instead of getters.
-   */
-  get _data() {
-    var _this = this;
-    /**
-     * Might be undefined when vuejs-devtools are used
-     * @link https://github.com/pubkey/rxdb/issues/1126
-     */
-    if (!_this.isInstanceOfRxDocument) {
-      return undefined;
-    }
-    return _this._dataSync$.getValue();
-  },
   get primaryPath() {
     var _this = this;
     if (!_this.isInstanceOfRxDocument) {
@@ -211,9 +34,7 @@ export var basePrototype = {
     if (!_this.isInstanceOfRxDocument) {
       return undefined;
     }
-    return _this._dataSync$.pipe(map(function (d) {
-      return d._deleted;
-    }));
+    return _this.$.pipe(map(d => d._deleted));
   },
   get deleted() {
     var _this = this;
@@ -222,69 +43,50 @@ export var basePrototype = {
     }
     return _this._data._deleted;
   },
+  getLatest() {
+    var latestDocData = this.collection._docCache.getLatestDocumentData(this.primary);
+    return this.collection._docCache.getCachedRxDocument(latestDocData);
+  },
   /**
    * returns the observable which emits the plain-data of this document
    */
   get $() {
     var _this = this;
-    return _this._dataSync$.asObservable().pipe(map(function (docData) {
-      return overwritable.deepFreezeWhenDevMode(docData);
-    }));
-  },
-  _handleChangeEvent: function _handleChangeEvent(changeEvent) {
-    if (changeEvent.documentId !== this.primary) {
-      return;
-    }
-
-    // ensure that new _rev is higher then current
-    var docData = getDocumentDataOfRxChangeEvent(changeEvent);
-    var newRevNr = getHeightOfRevision(docData._rev);
-    var currentRevNr = getHeightOfRevision(this._data._rev);
-    if (currentRevNr > newRevNr) return;
-    switch (changeEvent.operation) {
-      case 'INSERT':
-        break;
-      case 'UPDATE':
-        this._dataSync$.next(changeEvent.documentData);
-        break;
-      case 'DELETE':
-        // remove from docCache to assure new upserted RxDocuments will be a new instance
-        this.collection._docCache["delete"](this.primary);
-        this._dataSync$.next(changeEvent.documentData);
-        break;
-    }
+    return _this.collection.$.pipe(filter(changeEvent => !changeEvent.isLocal), filter(changeEvent => changeEvent.documentId === this.primary), map(changeEvent => getDocumentDataOfRxChangeEvent(changeEvent)), startWith(_this.collection._docCache.getLatestDocumentData(this.primary)), distinctUntilChanged((prev, curr) => prev._rev === curr._rev), shareReplay(RXJS_SHARE_REPLAY_DEFAULTS));
   },
   /**
    * returns observable of the value of the given path
    */
-  get$: function get$(path) {
-    if (path.includes('.item.')) {
-      throw newRxError('DOC1', {
-        path: path
-      });
-    }
-    if (path === this.primaryPath) throw newRxError('DOC2');
+  get$(path) {
+    if (overwritable.isDevMode()) {
+      if (path.includes('.item.')) {
+        throw newRxError('DOC1', {
+          path
+        });
+      }
+      if (path === this.primaryPath) {
+        throw newRxError('DOC2');
+      }
 
-    // final fields cannot be modified and so also not observed
-    if (this.collection.schema.finalFields.includes(path)) {
-      throw newRxError('DOC3', {
-        path: path
-      });
+      // final fields cannot be modified and so also not observed
+      if (this.collection.schema.finalFields.includes(path)) {
+        throw newRxError('DOC3', {
+          path
+        });
+      }
+      var schemaObj = getSchemaByObjectPath(this.collection.schema.jsonSchema, path);
+      if (!schemaObj) {
+        throw newRxError('DOC4', {
+          path
+        });
+      }
     }
-    var schemaObj = getSchemaByObjectPath(this.collection.schema.jsonSchema, path);
-    if (!schemaObj) {
-      throw newRxError('DOC4', {
-        path: path
-      });
-    }
-    return this._dataSync$.pipe(map(function (data) {
-      return objectPath.get(data, path);
-    }), distinctUntilChanged());
+    return this.$.pipe(map(data => getProperty(data, path)), distinctUntilChanged());
   },
   /**
    * populate the given path
    */
-  populate: function populate(path) {
+  populate(path) {
     var schemaObj = getSchemaByObjectPath(this.collection.schema.jsonSchema, path);
     var value = this.get(path);
     if (!value) {
@@ -292,25 +94,25 @@ export var basePrototype = {
     }
     if (!schemaObj) {
       throw newRxError('DOC5', {
-        path: path
+        path
       });
     }
     if (!schemaObj.ref) {
       throw newRxError('DOC6', {
-        path: path,
-        schemaObj: schemaObj
+        path,
+        schemaObj
       });
     }
     var refCollection = this.collection.database.collections[schemaObj.ref];
     if (!refCollection) {
       throw newRxError('DOC7', {
         ref: schemaObj.ref,
-        path: path,
-        schemaObj: schemaObj
+        path,
+        schemaObj
       });
     }
     if (schemaObj.type === 'array') {
-      return refCollection.findByIds(value).then(function (res) {
+      return refCollection.findByIds(value).exec().then(res => {
         var valuesIterator = res.values();
         return Array.from(valuesIterator);
       });
@@ -321,9 +123,9 @@ export var basePrototype = {
   /**
    * get data by objectPath
    */
-  get: function get(objPath) {
+  get(objPath) {
     if (!this._data) return undefined;
-    var valueObj = objectPath.get(this._data, objPath);
+    var valueObj = getProperty(this._data, objPath);
 
     // direct return if array or non-object
     if (typeof valueObj !== 'object' || Array.isArray(valueObj)) {
@@ -338,8 +140,7 @@ export var basePrototype = {
     defineGetterSetter(this.collection.schema, valueObj, objPath, this);
     return valueObj;
   },
-  toJSON: function toJSON() {
-    var withMetaFields = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : false;
+  toJSON(withMetaFields = false) {
     if (!withMetaFields) {
       var data = flatClone(this._data);
       delete data._rev;
@@ -351,8 +152,7 @@ export var basePrototype = {
       return overwritable.deepFreezeWhenDevMode(this._data);
     }
   },
-  toMutableJSON: function toMutableJSON() {
-    var withMetaFields = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : false;
+  toMutableJSON(withMetaFields = false) {
     return clone(this.toJSON(withMetaFields));
   },
   /**
@@ -360,100 +160,57 @@ export var basePrototype = {
    * @overwritten by plugin (optional)
    * @param updateObj mongodb-like syntax
    */
-  update: function update(_updateObj) {
+  update(_updateObj) {
     throw pluginMissing('update');
   },
-  updateCRDT: function updateCRDT(_updateObj) {
+  incrementalUpdate(_updateObj) {
+    throw pluginMissing('update');
+  },
+  updateCRDT(_updateObj) {
     throw pluginMissing('crdt');
   },
-  putAttachment: function putAttachment() {
+  putAttachment() {
     throw pluginMissing('attachments');
   },
-  getAttachment: function getAttachment() {
+  getAttachment() {
     throw pluginMissing('attachments');
   },
-  allAttachments: function allAttachments() {
+  allAttachments() {
     throw pluginMissing('attachments');
   },
   get allAttachments$() {
     throw pluginMissing('attachments');
   },
-  /**
-   * runs an atomic update over the document
-   * @param function that takes the document-data and returns a new data-object
-   */
-  atomicUpdate: function atomicUpdate(mutationFunction,
+  async modify(mutationFunction,
   // used by some plugins that wrap the method
   _context) {
-    var _this2 = this;
-    return new Promise(function (res, rej) {
-      _this2._atomicQueue = _this2._atomicQueue.then(function () {
-        try {
-          var _temp6 = function _temp6(_result3) {
-            if (_exit2) return _result3;
-            res(_this2);
-          };
-          var _exit2 = false;
-          var done = false;
-          // we need a hacky while loop to stay incide the chain-link of _atomicQueue
-          // while still having the option to run a retry on conflicts
-          var _temp7 = _for(function () {
-            return !_exit2 && !done;
-          }, void 0, function () {
-            function _temp3(_result) {
-              if (_exit2) return _result;
-              var _temp = _catch(function () {
-                return Promise.resolve(_this2._saveData(newData, oldData)).then(function () {
-                  done = true;
-                });
-              }, function (err) {
-                var useError = err.parameters && err.parameters.error ? err.parameters.error : err;
-                /**
-                 * conflicts cannot happen by just using RxDB in one process
-                 * There are two ways they still can appear which is
-                 * replication and multi-tab usage
-                 * Because atomicUpdate has a mutation function,
-                 * we can just re-run the mutation until there is no conflict
-                 */
-                var isConflict = isBulkWriteConflictError(useError);
-                if (isConflict) {} else {
-                  rej(useError);
-                  _exit2 = true;
-                }
-              });
-              if (_temp && _temp.then) return _temp.then(function () {});
-            }
-            var oldData = _this2._dataSync$.getValue();
-            // always await because mutationFunction might be async
-            var newData;
-            var _temp2 = _catch(function () {
-              return Promise.resolve(mutationFunction(clone(oldData), _this2)).then(function (_mutationFunction) {
-                newData = _mutationFunction;
-                if (_this2.collection) {
-                  newData = _this2.collection.schema.fillObjectWithDefaults(newData);
-                }
-              });
-            }, function (err) {
-              rej(err);
-              _exit2 = true;
-            });
-            return _temp2 && _temp2.then ? _temp2.then(_temp3) : _temp3(_temp2);
-          });
-          return Promise.resolve(_temp7 && _temp7.then ? _temp7.then(_temp6) : _temp6(_temp7));
-        } catch (e) {
-          return Promise.reject(e);
-        }
-      });
+    var oldData = this._data;
+    var newData = await modifierFromPublicToInternal(mutationFunction)(oldData);
+    return this._saveData(newData, oldData);
+  },
+  /**
+   * runs an incremental update over the document
+   * @param function that takes the document-data and returns a new data-object
+   */
+  incrementalModify(mutationFunction,
+  // used by some plugins that wrap the method
+  _context) {
+    return this.collection.incrementalWriteQueue.addWrite(this._data, modifierFromPublicToInternal(mutationFunction)).then(result => this.collection._docCache.getCachedRxDocument(result));
+  },
+  patch(patch) {
+    var oldData = this._data;
+    var newData = clone(oldData);
+    Object.entries(patch).forEach(([k, v]) => {
+      newData[k] = v;
     });
+    return this._saveData(newData, oldData);
   },
   /**
    * patches the given properties
    */
-  atomicPatch: function atomicPatch(patch) {
-    return this.atomicUpdate(function (docData) {
-      Object.entries(patch).forEach(function (_ref) {
-        var k = _ref[0],
-          v = _ref[1];
+  incrementalPatch(patch) {
+    return this.incrementalModify(docData => {
+      Object.entries(patch).forEach(([k, v]) => {
         docData[k] = v;
       });
       return docData;
@@ -463,52 +220,32 @@ export var basePrototype = {
    * saves the new document-data
    * and handles the events
    */
-  _saveData: function _saveData(newData, oldData) {
-    try {
-      var _this4 = this;
-      newData = flatClone(newData);
+  async _saveData(newData, oldData) {
+    newData = flatClone(newData);
 
-      // deleted documents cannot be changed
-      if (_this4._data._deleted) {
-        throw newRxError('DOC11', {
-          id: _this4.primary,
-          document: _this4
-        });
-      }
-
-      /**
-       * Meta values must always be merged
-       * instead of overwritten.
-       * This ensures that different plugins do not overwrite
-       * each others meta properties.
-       */
-      newData._meta = Object.assign({}, oldData._meta, newData._meta);
-
-      // ensure modifications are ok
-      if (overwritable.isDevMode()) {
-        _this4.collection.schema.validateChange(oldData, newData);
-      }
-      return Promise.resolve(_this4.collection._runHooks('pre', 'save', newData, _this4)).then(function () {
-        return Promise.resolve(_this4.collection.storageInstance.bulkWrite([{
-          previous: oldData,
-          document: newData
-        }], 'rx-document-save-data')).then(function (writeResult) {
-          var isError = writeResult.error[_this4.primary];
-          throwIfIsStorageWriteError(_this4.collection, _this4.primary, newData, isError);
-          return _this4.collection._runHooks('post', 'save', newData, _this4);
-        });
+    // deleted documents cannot be changed
+    if (this._data._deleted) {
+      throw newRxError('DOC11', {
+        id: this.primary,
+        document: this
       });
-    } catch (e) {
-      return Promise.reject(e);
     }
+    await beforeDocumentUpdateWrite(this.collection, newData, oldData);
+    var writeResult = await this.collection.storageInstance.bulkWrite([{
+      previous: oldData,
+      document: newData
+    }], 'rx-document-save-data');
+    var isError = writeResult.error[this.primary];
+    throwIfIsStorageWriteError(this.collection, this.primary, newData, isError);
+    await this.collection._runHooks('post', 'save', newData, this);
+    return this.collection._docCache.getCachedRxDocument(getFromObjectOrThrow(writeResult.success, this.primary));
   },
   /**
-   * remove the document,
-   * this not not equal to a pouchdb.remove(),
-   * instead we keep the values and only set _deleted: true
+   * Remove the document.
+   * Notice that there is no hard delete,
+   * instead deleted documents get flagged with _deleted=true.
    */
-  remove: function remove() {
-    var _this5 = this;
+  remove() {
     var collection = this.collection;
     if (this.deleted) {
       return Promise.reject(newRxError('DOC13', {
@@ -517,38 +254,43 @@ export var basePrototype = {
       }));
     }
     var deletedData = flatClone(this._data);
-    return collection._runHooks('pre', 'remove', deletedData, this).then(function () {
-      try {
-        deletedData._deleted = true;
-        return Promise.resolve(collection.storageInstance.bulkWrite([{
-          previous: _this5._data,
-          document: deletedData
-        }], 'rx-document-remove')).then(function (writeResult) {
-          var isError = writeResult.error[_this5.primary];
-          throwIfIsStorageWriteError(collection, _this5.primary, deletedData, isError);
-          return ensureNotFalsy(writeResult.success[_this5.primary]);
-        });
-      } catch (e) {
-        return Promise.reject(e);
-      }
-    }).then(function () {
-      return _this5.collection._runHooks('post', 'remove', deletedData, _this5);
-    }).then(function () {
-      return _this5;
+    var removedDocData;
+    return collection._runHooks('pre', 'remove', deletedData, this).then(async () => {
+      deletedData._deleted = true;
+      var writeResult = await collection.storageInstance.bulkWrite([{
+        previous: this._data,
+        document: deletedData
+      }], 'rx-document-remove');
+      var isError = writeResult.error[this.primary];
+      throwIfIsStorageWriteError(collection, this.primary, deletedData, isError);
+      return getFromObjectOrThrow(writeResult.success, this.primary);
+    }).then(removed => {
+      removedDocData = removed;
+      return this.collection._runHooks('post', 'remove', deletedData, this);
+    }).then(() => {
+      return this.collection._docCache.getCachedRxDocument(removedDocData);
     });
   },
-  destroy: function destroy() {
+  incrementalRemove() {
+    return this.incrementalModify(async docData => {
+      await this.collection._runHooks('pre', 'remove', docData, this);
+      docData._deleted = true;
+      return docData;
+    }).then(async newDoc => {
+      await this.collection._runHooks('post', 'remove', newDoc._data, newDoc);
+      return newDoc;
+    });
+  },
+  destroy() {
     throw newRxError('DOC14');
   }
 };
-export function createRxDocumentConstructor() {
-  var proto = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : basePrototype;
-  var constructor = function RxDocumentConstructor(collection, jsonData) {
+export function createRxDocumentConstructor(proto = basePrototype) {
+  var constructor = function RxDocumentConstructor(collection, docData) {
     this.collection = collection;
 
     // assume that this is always equal to the doc-data in the database
-    this._dataSync$ = new BehaviorSubject(jsonData);
-    this._atomicQueue = PROMISE_RESOLVE_VOID;
+    this._data = docData;
 
     /**
      * because of the prototype-merge,
@@ -559,14 +301,12 @@ export function createRxDocumentConstructor() {
   constructor.prototype = proto;
   return constructor;
 }
-export function defineGetterSetter(schema, valueObj) {
-  var objPath = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : '';
-  var thisObj = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : false;
+export function defineGetterSetter(schema, valueObj, objPath = '', thisObj = false) {
   if (valueObj === null) return;
   var pathProperties = getSchemaByObjectPath(schema.jsonSchema, objPath);
   if (typeof pathProperties === 'undefined') return;
   if (pathProperties.properties) pathProperties = pathProperties.properties;
-  Object.keys(pathProperties).forEach(function (key) {
+  Object.keys(pathProperties).forEach(key => {
     var fullPath = trimDots(objPath + '.' + key);
 
     // getter - value
@@ -585,7 +325,7 @@ export function defineGetterSetter(schema, valueObj) {
     });
     // getter - observable$
     Object.defineProperty(valueObj, key + '$', {
-      get: function get() {
+      get: function () {
         var _this = thisObj ? thisObj : this;
         return _this.get$(fullPath);
       },
@@ -594,7 +334,7 @@ export function defineGetterSetter(schema, valueObj) {
     });
     // getter - populate_
     Object.defineProperty(valueObj, key + '_', {
-      get: function get() {
+      get: function () {
         var _this = thisObj ? thisObj : this;
         return _this.populate(fullPath);
       },
@@ -609,10 +349,6 @@ export function defineGetterSetter(schema, valueObj) {
   });
 }
 export function createWithConstructor(constructor, collection, jsonData) {
-  var primary = jsonData[collection.schema.primaryPath];
-  if (primary && primary.startsWith('_design')) {
-    return null;
-  }
   var doc = new constructor(collection, jsonData);
   runPluginHooks('createRxDocument', doc);
   return doc;
@@ -620,5 +356,20 @@ export function createWithConstructor(constructor, collection, jsonData) {
 export function isRxDocument(obj) {
   if (typeof obj === 'undefined') return false;
   return !!obj.isInstanceOfRxDocument;
+}
+export function beforeDocumentUpdateWrite(collection, newData, oldData) {
+  /**
+   * Meta values must always be merged
+   * instead of overwritten.
+   * This ensures that different plugins do not overwrite
+   * each others meta properties.
+   */
+  newData._meta = Object.assign({}, oldData._meta, newData._meta);
+
+  // ensure modifications are ok
+  if (overwritable.isDevMode()) {
+    collection.schema.validateChange(oldData, newData);
+  }
+  return collection._runHooks('pre', 'save', newData);
 }
 //# sourceMappingURL=rx-document.js.map

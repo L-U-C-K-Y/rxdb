@@ -18,7 +18,12 @@ import {
 } from '../../plugins/dev-mode';
 import { EXAMPLE_REVISION_1 } from '../helper/revisions';
 import * as schemas from '../helper/schemas';
-import { human } from '../helper/schema-objects';
+import {
+    HeroArrayDocumentType,
+    human,
+    nestedHuman,
+    NestedHumanDocumentType
+} from '../helper/schema-objects';
 
 const TEST_CONTEXT = 'rx-storage-query-correctness.test.ts';
 config.parallel('rx-storage-query-correctness.test.ts', () => {
@@ -186,11 +191,7 @@ config.parallel('rx-storage-query-correctness.test.ts', () => {
             ['firstName']
         ]),
         queries: [
-            /**
-             * TODO using $gte in pouchdb returns the wrong results,
-             * create an issue at the PouchDB repo.
-             */
-            config.isNotOneOfTheseStorages(['pouchdb']) ? {
+            {
                 info: 'normal $gt',
                 query: {
                     selector: {
@@ -206,7 +207,7 @@ config.parallel('rx-storage-query-correctness.test.ts', () => {
                     'dd',
                     'ee'
                 ]
-            } : undefined,
+            },
             {
                 info: 'normal $gte',
                 query: {
@@ -242,7 +243,7 @@ config.parallel('rx-storage-query-correctness.test.ts', () => {
                     'ee'
                 ]
             },
-            config.isNotOneOfTheseStorages(['pouchdb']) ? {
+            {
                 info: 'with string comparison',
                 query: {
                     selector: {
@@ -257,8 +258,8 @@ config.parallel('rx-storage-query-correctness.test.ts', () => {
                     'dd',
                     'ee'
                 ]
-            } : undefined,
-            config.isNotOneOfTheseStorages(['pouchdb']) ? {
+            },
+            {
                 info: 'compare more then one field',
                 query: {
                     selector: {
@@ -276,7 +277,7 @@ config.parallel('rx-storage-query-correctness.test.ts', () => {
                     'dd',
                     'ee'
                 ]
-            } : undefined,
+            }
         ]
     });
     testCorrectQueries<schemas.HumanDocumentType>({
@@ -368,6 +369,181 @@ config.parallel('rx-storage-query-correctness.test.ts', () => {
                     'cc-looong-id'
                 ]
             }
+        ]
+    });
+    testCorrectQueries<NestedHumanDocumentType>({
+        testTitle: 'nested properties',
+        data: [
+            nestedHuman({
+                passportId: 'aaa',
+                mainSkill: {
+                    level: 6,
+                    name: 'zzz'
+                }
+            }),
+            nestedHuman({
+                passportId: 'bbb',
+                mainSkill: {
+                    level: 4,
+                    name: 'ttt'
+                }
+            }),
+            nestedHuman({
+                passportId: 'ccc',
+                mainSkill: {
+                    level: 3,
+                    name: 'ccc'
+                }
+            })
+        ],
+        schema: withIndexes(schemas.nestedHuman, [
+            ['mainSkill.level'],
+            ['mainSkill.name']
+        ]),
+        queries: [
+            {
+                info: 'sort by nested mainSkill.name',
+                query: {
+                    selector: {
+                    },
+                    sort: [{ 'mainSkill.name': 'asc' }]
+                },
+                expectedResultDocIds: [
+                    'ccc',
+                    'bbb',
+                    'aaa'
+                ]
+            }
+        ]
+    });
+    testCorrectQueries<schemas.HumanDocumentType>({
+        testTitle: '$in',
+        data: [
+            human('aa', 10, 'alice'),
+            human('bb', 20, 'bob'),
+            human('cc', 30, 'carol'),
+            human('dd', 40, 'dave'),
+            human('ee', 50, 'eve')
+        ],
+        schema: schemas.human,
+        queries: [
+            {
+                info: 'get first',
+                query: {
+                    selector: {
+                        firstName: {
+                            $in: ['alice']
+                        },
+                    },
+                    sort: [{ name: 'asc' }]
+                },
+                expectedResultDocIds: [
+                    'aa'
+                ]
+            },
+            {
+                info: 'get by multiple',
+                query: {
+                    selector: {
+                        firstName: {
+                            $in: ['alice', 'bob']
+                        },
+                    },
+                    sort: [{ name: 'asc' }]
+                },
+                expectedResultDocIds: [
+                    'aa',
+                    'bb'
+                ]
+            },
+            {
+                info: 'get none matching',
+                query: {
+                    selector: {
+                        firstName: {
+                            $in: ['foobar', 'barfoo']
+                        },
+                    },
+                    sort: [{ name: 'asc' }]
+                },
+                expectedResultDocIds: []
+            }
+        ]
+    });
+    testCorrectQueries<HeroArrayDocumentType>({
+        testTitle: '$elemMatch/$size',
+        data: [
+            {
+                name: 'foo1',
+                skills: [
+                    {
+                        name: 'bar1',
+                        damage: 10
+                    },
+                    {
+                        name: 'bar2',
+                        damage: 5
+                    },
+                ],
+            },
+            {
+                name: 'foo2',
+                skills: [
+                    {
+                        name: 'bar3',
+                        damage: 10
+                    },
+                    {
+                        name: 'bar4',
+                        damage: 10
+                    },
+                ],
+            },
+            {
+                name: 'foo3',
+                skills: [
+                    {
+                        name: 'bar5',
+                        damage: 5
+                    },
+                ],
+            }
+        ],
+        schema: schemas.heroArray,
+        queries: [
+            {
+                info: '$elemMatch',
+                query: {
+                    selector: {
+                        skills: {
+                            $elemMatch: {
+                                damage: 5
+                            }
+                        },
+                    },
+                    sort: [{ name: 'asc' }]
+                },
+                selectorSatisfiedByIndex: false,
+                expectedResultDocIds: [
+                    'foo1',
+                    'foo3'
+                ]
+            },
+            {
+                info: '$size',
+                query: {
+                    selector: {
+                        skills: {
+                            $size: 1
+                        },
+                    },
+                    sort: [{ name: 'asc' }]
+                },
+                selectorSatisfiedByIndex: false,
+                expectedResultDocIds: [
+                    'foo3'
+                ]
+            },
         ]
     });
 });

@@ -3,85 +3,62 @@
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
-exports.RX_LOCAL_DOCUMENT_SCHEMA = void 0;
+exports.RX_LOCAL_DOCUMENT_SCHEMA = exports.LOCAL_DOC_STATE_BY_PARENT_RESOLVED = exports.LOCAL_DOC_STATE_BY_PARENT = void 0;
 exports.closeStateByParent = closeStateByParent;
 exports.createLocalDocStateByParent = createLocalDocStateByParent;
 exports.createLocalDocumentStorageInstance = createLocalDocumentStorageInstance;
 exports.getCollectionLocalInstanceName = getCollectionLocalInstanceName;
 exports.getLocalDocStateByParent = getLocalDocStateByParent;
-exports.removeLocalDocumentsStorageInstance = void 0;
+exports.removeLocalDocumentsStorageInstance = removeLocalDocumentsStorageInstance;
 var _operators = require("rxjs/operators");
 var _docCache = require("../../doc-cache");
+var _incrementalWrite = require("../../incremental-write");
 var _rxError = require("../../rx-error");
 var _rxSchemaHelper = require("../../rx-schema-helper");
 var _rxStorageHelper = require("../../rx-storage-helper");
-var _util = require("../../util");
-var removeLocalDocumentsStorageInstance = function removeLocalDocumentsStorageInstance(storage, databaseName, collectionName) {
-  try {
-    var databaseInstanceToken = (0, _util.randomCouchString)(10);
-    return Promise.resolve(createLocalDocumentStorageInstance(databaseInstanceToken, storage, databaseName, collectionName, {}, false)).then(function (storageInstance) {
-      return Promise.resolve(storageInstance.remove()).then(function () {});
-    });
-  } catch (e) {
-    return Promise.reject(e);
-  }
-};
-exports.removeLocalDocumentsStorageInstance = removeLocalDocumentsStorageInstance;
+var _utils = require("../../plugins/utils");
+var _rxLocalDocument = require("./rx-local-document");
 var LOCAL_DOC_STATE_BY_PARENT = new WeakMap();
+exports.LOCAL_DOC_STATE_BY_PARENT = LOCAL_DOC_STATE_BY_PARENT;
+var LOCAL_DOC_STATE_BY_PARENT_RESOLVED = new WeakMap();
+exports.LOCAL_DOC_STATE_BY_PARENT_RESOLVED = LOCAL_DOC_STATE_BY_PARENT_RESOLVED;
 function createLocalDocStateByParent(parent) {
   var database = parent.database ? parent.database : parent;
   var collectionName = parent.database ? parent.name : '';
-  var statePromise = function () {
-    try {
-      return Promise.resolve(createLocalDocumentStorageInstance(database.token, database.storage, database.name, collectionName, database.instanceCreationOptions, database.multiInstance)).then(function (storageInstance) {
-        storageInstance = (0, _rxStorageHelper.getWrappedStorageInstance)(database, storageInstance, RX_LOCAL_DOCUMENT_SCHEMA);
-        var docCache = new _docCache.DocCache();
+  var statePromise = (async () => {
+    var storageInstance = await createLocalDocumentStorageInstance(database.token, database.storage, database.name, collectionName, database.instanceCreationOptions, database.multiInstance);
+    storageInstance = (0, _rxStorageHelper.getWrappedStorageInstance)(database, storageInstance, RX_LOCAL_DOCUMENT_SCHEMA);
+    var docCache = new _docCache.DocumentCache('id', parent.$.pipe((0, _operators.filter)(cE => cE.isLocal)), docData => (0, _rxLocalDocument.createRxLocalDocument)(docData, parent));
+    var incrementalWriteQueue = new _incrementalWrite.IncrementalWriteQueue(storageInstance, 'id', () => {}, () => {});
 
-        /**
-         * Update cached local documents on events.
-         */
-        var sub = parent.$.pipe((0, _operators.filter)(function (cE) {
-          return cE.isLocal;
-        })).subscribe(function (cE) {
-          var doc = docCache.get(cE.documentId);
-          if (doc) {
-            doc._handleChangeEvent(cE);
-          }
-        });
-        parent._subs.push(sub);
-
-        /**
-         * Emit the changestream into the collections change stream
-         */
-        return Promise.resolve(database.storageToken).then(function (databaseStorageToken) {
-          var subLocalDocs = storageInstance.changeStream().subscribe(function (eventBulk) {
-            var changeEventBulk = {
-              id: eventBulk.id,
-              internal: false,
-              collectionName: parent.database ? parent.name : undefined,
-              storageToken: databaseStorageToken,
-              events: eventBulk.events.map(function (ev) {
-                return (0, _rxStorageHelper.storageChangeEventToRxChangeEvent)(true, ev, parent.database ? parent : undefined);
-              }),
-              databaseToken: database.token,
-              checkpoint: eventBulk.checkpoint,
-              context: eventBulk.context
-            };
-            database.$emit(changeEventBulk);
-          });
-          parent._subs.push(subLocalDocs);
-          return {
-            database: database,
-            parent: parent,
-            storageInstance: storageInstance,
-            docCache: docCache
-          };
-        });
-      });
-    } catch (e) {
-      return Promise.reject(e);
-    }
-  }();
+    /**
+     * Emit the changestream into the collections change stream
+     */
+    var databaseStorageToken = await database.storageToken;
+    var subLocalDocs = storageInstance.changeStream().subscribe(eventBulk => {
+      var changeEventBulk = {
+        id: eventBulk.id,
+        internal: false,
+        collectionName: parent.database ? parent.name : undefined,
+        storageToken: databaseStorageToken,
+        events: eventBulk.events.map(ev => (0, _rxStorageHelper.storageChangeEventToRxChangeEvent)(true, ev, parent.database ? parent : undefined)),
+        databaseToken: database.token,
+        checkpoint: eventBulk.checkpoint,
+        context: eventBulk.context
+      };
+      database.$emit(changeEventBulk);
+    });
+    parent._subs.push(subLocalDocs);
+    var state = {
+      database,
+      parent,
+      storageInstance,
+      docCache,
+      incrementalWriteQueue
+    };
+    LOCAL_DOC_STATE_BY_PARENT_RESOLVED.set(parent, state);
+    return state;
+  })();
   LOCAL_DOC_STATE_BY_PARENT.set(parent, statePromise);
 }
 function getLocalDocStateByParent(parent) {
@@ -98,7 +75,7 @@ function getLocalDocStateByParent(parent) {
 }
 function createLocalDocumentStorageInstance(databaseInstanceToken, storage, databaseName, collectionName, instanceCreationOptions, multiInstance) {
   return storage.createStorageInstance({
-    databaseInstanceToken: databaseInstanceToken,
+    databaseInstanceToken,
     databaseName: databaseName,
     /**
      * Use a different collection name for the local documents instance
@@ -108,17 +85,20 @@ function createLocalDocumentStorageInstance(databaseInstanceToken, storage, data
     collectionName: getCollectionLocalInstanceName(collectionName),
     schema: RX_LOCAL_DOCUMENT_SCHEMA,
     options: instanceCreationOptions,
-    multiInstance: multiInstance
+    multiInstance
   });
 }
 function closeStateByParent(parent) {
   var statePromise = LOCAL_DOC_STATE_BY_PARENT.get(parent);
   if (statePromise) {
-    LOCAL_DOC_STATE_BY_PARENT["delete"](parent);
-    return statePromise.then(function (state) {
-      return state.storageInstance.close();
-    });
+    LOCAL_DOC_STATE_BY_PARENT.delete(parent);
+    return statePromise.then(state => state.storageInstance.close());
   }
+}
+async function removeLocalDocumentsStorageInstance(storage, databaseName, collectionName) {
+  var databaseInstanceToken = (0, _utils.randomCouchString)(10);
+  var storageInstance = await createLocalDocumentStorageInstance(databaseInstanceToken, storage, databaseName, collectionName, {}, false);
+  await storageInstance.remove();
 }
 function getCollectionLocalInstanceName(collectionName) {
   return 'plugin-local-documents-' + collectionName;

@@ -1,5 +1,5 @@
 import { RxGraphQLReplicationClientState, RxGraphQLReplicationQueryBuilderResponseObject } from '../../types';
-export declare const GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX = "rxdb-replication-graphql-";
+export declare const GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX = "graphql";
 export interface GraphQLError {
     message: string;
     locations: Array<{
@@ -8,5 +8,5 @@ export interface GraphQLError {
     }>;
     path: string[];
 }
-export declare type GraphQLErrors = Array<GraphQLError>;
+export type GraphQLErrors = Array<GraphQLError>;
 export declare function graphQLRequest(httpUrl: string, clientState: RxGraphQLReplicationClientState, queryParams: RxGraphQLReplicationQueryBuilderResponseObject): Promise<any>;

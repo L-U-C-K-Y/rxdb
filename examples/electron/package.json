@@ -11,12 +11,12 @@
     "test": "mocha"
   },
   "dependencies": {
-    "electron": "21.3.3",
+    "electron": "22.0.1",
     "rxdb": "file:rxdb-local.tgz",
-    "rxjs": "7.5.7"
+    "rxjs": "7.8.0"
   },
   "devDependencies": {
-    "mocha": "8.4.0",
-    "playwright-core": "1.25.2"
+    "mocha": "10.2.0",
+    "playwright-core": "1.29.2"
   }
 }

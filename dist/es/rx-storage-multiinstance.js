@@ -53,9 +53,9 @@ export function removeBroadcastChannelReference(databaseInstanceToken, refObject
   if (!state) {
     return;
   }
-  state.refs["delete"](refObject);
+  state.refs.delete(refObject);
   if (state.refs.size === 0) {
-    BROADCAST_CHANNEL_BY_TOKEN["delete"](databaseInstanceToken);
+    BROADCAST_CHANNEL_BY_TOKEN.delete(databaseInstanceToken);
     return state.bc.close();
   }
 }
@@ -70,7 +70,7 @@ providedBroadcastChannel) {
   }
   var broadcastChannel = providedBroadcastChannel ? providedBroadcastChannel : getBroadcastChannelReference(instanceCreationParams.databaseInstanceToken, instance.databaseName, instance);
   var changesFromOtherInstances$ = new Subject();
-  var eventListener = function eventListener(msg) {
+  var eventListener = msg => {
     if (msg.storageName === storageName && msg.databaseName === instanceCreationParams.databaseName && msg.collectionName === instanceCreationParams.collectionName && msg.version === instanceCreationParams.schema.version) {
       changesFromOtherInstances$.next(msg.eventBulk);
     }
@@ -78,7 +78,7 @@ providedBroadcastChannel) {
   broadcastChannel.addEventListener('message', eventListener);
   var oldChangestream$ = instance.changeStream();
   var closed = false;
-  var sub = oldChangestream$.subscribe(function (eventBulk) {
+  var sub = oldChangestream$.subscribe(eventBulk => {
     if (closed) {
       return;
     }
@@ -87,47 +87,31 @@ providedBroadcastChannel) {
       databaseName: instanceCreationParams.databaseName,
       collectionName: instanceCreationParams.collectionName,
       version: instanceCreationParams.schema.version,
-      eventBulk: eventBulk
+      eventBulk
     });
   });
   instance.changeStream = function () {
     return changesFromOtherInstances$.asObservable().pipe(mergeWith(oldChangestream$));
   };
   var oldClose = instance.close.bind(instance);
-  instance.close = function () {
-    try {
-      closed = true;
-      sub.unsubscribe();
-      broadcastChannel.removeEventListener('message', eventListener);
-      var _temp2 = function () {
-        if (!providedBroadcastChannel) {
-          return Promise.resolve(removeBroadcastChannelReference(instanceCreationParams.databaseInstanceToken, instance)).then(function () {});
-        }
-      }();
-      return Promise.resolve(_temp2 && _temp2.then ? _temp2.then(function () {
-        return oldClose();
-      }) : oldClose());
-    } catch (e) {
-      return Promise.reject(e);
+  instance.close = async function () {
+    closed = true;
+    sub.unsubscribe();
+    broadcastChannel.removeEventListener('message', eventListener);
+    if (!providedBroadcastChannel) {
+      await removeBroadcastChannelReference(instanceCreationParams.databaseInstanceToken, instance);
     }
+    return oldClose();
   };
   var oldRemove = instance.remove.bind(instance);
-  instance.remove = function () {
-    try {
-      closed = true;
-      sub.unsubscribe();
-      broadcastChannel.removeEventListener('message', eventListener);
-      var _temp4 = function () {
-        if (!providedBroadcastChannel) {
-          return Promise.resolve(removeBroadcastChannelReference(instanceCreationParams.databaseInstanceToken, instance)).then(function () {});
-        }
-      }();
-      return Promise.resolve(_temp4 && _temp4.then ? _temp4.then(function () {
-        return oldRemove();
-      }) : oldRemove());
-    } catch (e) {
-      return Promise.reject(e);
+  instance.remove = async function () {
+    closed = true;
+    sub.unsubscribe();
+    broadcastChannel.removeEventListener('message', eventListener);
+    if (!providedBroadcastChannel) {
+      await removeBroadcastChannelReference(instanceCreationParams.databaseInstanceToken, instance);
     }
+    return oldRemove();
   };
 }
 //# sourceMappingURL=rx-storage-multiinstance.js.map

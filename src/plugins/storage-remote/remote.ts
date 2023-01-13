@@ -4,8 +4,9 @@ import type {
     RxStorageInstanceCreationParams
 } from '../../types';
 import {
+    deepEqual,
     ensureNotFalsy
-} from '../../util';
+} from '../../plugins/utils';
 import { createAnswer, createErrorAnswer } from './storage-remote-helpers';
 import type {
     MessageFromRemote,
@@ -13,7 +14,6 @@ import type {
     RxStorageRemoteExposeSettings,
     RxStorageRemoteExposeType
 } from './storage-remote-types';
-import deepEqual from 'fast-deep-equal';
 
 /**
  * Run this on the 'remote' part,
@@ -21,7 +21,7 @@ import deepEqual from 'fast-deep-equal';
  */
 export function exposeRxStorageRemote(settings: RxStorageRemoteExposeSettings): RxStorageRemoteExposeType {
     type InstanceState = {
-        storageInstance: RxStorageInstance<any, any, any>;
+        storageInstancePromise: Promise<RxStorageInstance<any, any, any>>;
         connectionIds: Set<string>;
         params: RxStorageInstanceCreationParams<any, any>;
     };
@@ -55,9 +55,13 @@ export function exposeRxStorageRemote(settings: RxStorageRemoteExposeSettings): 
         let state = instanceByFullName.get(fullName);
         if (!state) {
             try {
-                const newRxStorageInstance = await settings.storage.createStorageInstance(params);
                 state = {
-                    storageInstance: newRxStorageInstance,
+                    /**
+                     * We work with a promise here to ensure
+                     * that parallel create-calls will still end up
+                     * with exactly one instance and not more.
+                     */
+                    storageInstancePromise: settings.storage.createStorageInstance(params),
                     connectionIds: new Set(),
                     params
                 };
@@ -70,28 +74,30 @@ export function exposeRxStorageRemote(settings: RxStorageRemoteExposeSettings): 
             // if instance already existed, ensure that the schema is equal
             if (!deepEqual(params.schema, state.params.schema)) {
                 settings.send(createErrorAnswer(msg, new Error('Remote storage: schema not equal to existing storage')));
+                return;
             }
         }
         state.connectionIds.add(msg.connectionId);
         const subs: Subscription[] = [];
+
+        const storageInstance = await state.storageInstancePromise;
         /**
-         * Automatically subscribe to the streams$
+         * Automatically subscribe to the changeStream()
          * because we always need them.
          */
         subs.push(
-            state.storageInstance.changeStream().subscribe(changes => {
+            storageInstance.changeStream().subscribe(changes => {
                 const message: MessageFromRemote = {
                     connectionId,
                     answerTo: 'changestream',
                     method: 'changeStream',
                     return: changes
                 };
-
                 settings.send(message);
             })
         );
         subs.push(
-            state.storageInstance.conflictResultionTasks().subscribe(conflicts => {
+            storageInstance.conflictResultionTasks().subscribe(conflicts => {
                 const message: MessageFromRemote = {
                     connectionId,
                     answerTo: 'conflictResultionTasks',
@@ -128,7 +134,7 @@ export function exposeRxStorageRemote(settings: RxStorageRemoteExposeSettings): 
                         subs.forEach(sub => sub.unsubscribe());
                         return;
                     }
-                    result = await (ensureNotFalsy(state).storageInstance as any)[message.method](
+                    result = await (storageInstance as any)[message.method](
                         message.params[0],
                         message.params[1],
                         message.params[2],

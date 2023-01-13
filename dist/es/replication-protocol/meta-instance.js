@@ -1,6 +1,6 @@
 import { fillWithDefaultSettings, getComposedPrimaryKeyOfDocumentData } from '../rx-schema-helper';
 import { flatCloneDocWithMeta } from '../rx-storage-helper';
-import { getDefaultRevision, createRevision, now } from '../util';
+import { getDefaultRevision, createRevision, now } from '../plugins/utils';
 export var RX_REPLICATION_META_INSTANCE_SCHEMA = fillWithDefaultSettings({
   primaryKey: {
     key: 'id',
@@ -21,7 +21,7 @@ export var RX_REPLICATION_META_INSTANCE_SCHEMA = fillWithDefaultSettings({
     },
     isCheckpoint: {
       type: 'string',
-      "enum": ['0', '1'],
+      enum: ['0', '1'],
       maxLength: 1
     },
     itemId: {
@@ -43,16 +43,16 @@ export var RX_REPLICATION_META_INSTANCE_SCHEMA = fillWithDefaultSettings({
  * assumes to be the latest state on the master instance.
  */
 export function getAssumedMasterState(state, docIds) {
-  return state.input.metaInstance.findDocumentsById(docIds.map(function (docId) {
+  return state.input.metaInstance.findDocumentsById(docIds.map(docId => {
     var useId = getComposedPrimaryKeyOfDocumentData(RX_REPLICATION_META_INSTANCE_SCHEMA, {
       itemId: docId,
       replicationIdentifier: state.checkpointKey,
       isCheckpoint: '0'
     });
     return useId;
-  }), true).then(function (metaDocs) {
+  }), true).then(metaDocs => {
     var ret = {};
-    Object.values(metaDocs).forEach(function (metaDoc) {
+    Object.values(metaDocs).forEach(metaDoc => {
       ret[metaDoc.itemId] = {
         docData: metaDoc.data,
         metaDocument: metaDoc
@@ -80,9 +80,9 @@ export function getMetaWriteRow(state, newMasterDocState, previous, isResolvedCo
   newMeta.isResolvedConflict = isResolvedConflict;
   newMeta._meta.lwt = now();
   newMeta.id = getComposedPrimaryKeyOfDocumentData(RX_REPLICATION_META_INSTANCE_SCHEMA, newMeta);
-  newMeta._rev = createRevision(state.input.hashFunction, newMeta, previous);
+  newMeta._rev = createRevision(state.input.identifier, previous);
   return {
-    previous: previous,
+    previous,
     document: newMeta
   };
 }

@@ -2,11 +2,11 @@
  * this plugin adds the RxCollection.syncGraphQl()-function to rxdb
  * you can use it to sync collections with a remote graphql endpoint.
  */
-import objectPath from 'object-path';
 import {
     ensureNotFalsy,
-    fastUnsecureHash
-} from '../../util';
+    fastUnsecureHash,
+    getProperty
+} from '../../plugins/utils';
 
 import {
     graphQLRequest,
@@ -16,7 +16,6 @@ import {
 import { RxDBLeaderElectionPlugin } from '../leader-election';
 import type {
     RxCollection,
-    RxPlugin,
     ReplicationPullOptions,
     ReplicationPushOptions,
     RxReplicationWriteToMasterRow,
@@ -88,10 +87,9 @@ export class RxGraphQLReplicationState<RxDocType, CheckpointType> extends RxRepl
     }
 }
 
-
-export function syncGraphQL<RxDocType, CheckpointType>(
-    this: RxCollection<RxDocType>,
+export function replicateGraphQL<RxDocType, CheckpointType>(
     {
+        collection,
         url,
         headers = {},
         credentials,
@@ -104,8 +102,7 @@ export function syncGraphQL<RxDocType, CheckpointType>(
         autoStart = true,
     }: SyncOptionsGraphQL<RxDocType, CheckpointType>
 ): RxGraphQLReplicationState<RxDocType, CheckpointType> {
-    const collection = this;
-
+    addRxPlugin(RxDBLeaderElectionPlugin);
     /**
      * We use this object to store the GraphQL client
      * so we can later swap out the client inside of the replication handlers.
@@ -130,10 +127,8 @@ export function syncGraphQL<RxDocType, CheckpointType>(
                 if (result.errors) {
                     throw result.errors;
                 }
-
                 const dataPath = pull.dataPath || ['data', Object.keys(result.data)[0]];
-                let data: any = objectPath.get(result, dataPath);
-
+                let data: any = getProperty(result, dataPath);
                 if (pull.responseModifier) {
                     data = await pull.responseModifier(
                         data,
@@ -168,7 +163,7 @@ export function syncGraphQL<RxDocType, CheckpointType>(
                     throw result.errors;
                 }
                 const dataPath = Object.keys(result.data)[0];
-                const data: any = objectPath.get(result.data, dataPath);
+                const data: any = getProperty(result.data, dataPath);
                 return data;
             },
             batchSize: push.batchSize,
@@ -247,16 +242,3 @@ export * from './helper';
 export * from './graphql-schema-from-rx-schema';
 export * from './query-builder-from-rx-schema';
 export * from './graphql-websocket';
-
-export const RxDBReplicationGraphQLPlugin: RxPlugin = {
-    name: 'replication-graphql',
-    init() {
-        addRxPlugin(RxDBLeaderElectionPlugin);
-    },
-    rxdb: true,
-    prototypes: {
-        RxCollection: (proto: any) => {
-            proto.syncGraphQL = syncGraphQL;
-        }
-    }
-};

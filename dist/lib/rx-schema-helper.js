@@ -1,6 +1,5 @@
 "use strict";
 
-var _interopRequireDefault = require("@babel/runtime/helpers/interopRequireDefault");
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
@@ -13,23 +12,23 @@ exports.getPrimaryFieldOfPrimaryKey = getPrimaryFieldOfPrimaryKey;
 exports.getPseudoSchemaForVersion = getPseudoSchemaForVersion;
 exports.getSchemaByObjectPath = getSchemaByObjectPath;
 exports.normalizeRxJsonSchema = normalizeRxJsonSchema;
-var _objectPath = _interopRequireDefault(require("object-path"));
 var _rxError = require("./rx-error");
-var _util = require("./util");
+var _utils = require("./plugins/utils");
 /**
  * Helper function to create a valid RxJsonSchema
  * with a given version.
  */
 function getPseudoSchemaForVersion(version, primaryKey) {
-  var _properties;
   var pseudoSchema = fillWithDefaultSettings({
-    version: version,
+    version,
     type: 'object',
     primaryKey: primaryKey,
-    properties: (_properties = {}, _properties[primaryKey] = {
-      type: 'string',
-      maxLength: 100
-    }, _properties),
+    properties: {
+      [primaryKey]: {
+        type: 'string',
+        maxLength: 100
+      }
+    },
     required: [primaryKey]
   });
   return pseudoSchema;
@@ -42,20 +41,20 @@ function getSchemaByObjectPath(rxJsonSchema, path) {
   var usePath = path;
   usePath = usePath.replace(/\./g, '.properties.');
   usePath = 'properties.' + usePath;
-  usePath = (0, _util.trimDots)(usePath);
-  var ret = _objectPath["default"].get(rxJsonSchema, usePath);
+  usePath = (0, _utils.trimDots)(usePath);
+  var ret = (0, _utils.getProperty)(rxJsonSchema, usePath);
   return ret;
 }
 function fillPrimaryKey(primaryPath, jsonSchema, documentData) {
-  var cloned = (0, _util.flatClone)(documentData);
+  var cloned = (0, _utils.flatClone)(documentData);
   var newPrimary = getComposedPrimaryKeyOfDocumentData(jsonSchema, documentData);
   var existingPrimary = documentData[primaryPath];
   if (existingPrimary && existingPrimary !== newPrimary) {
     throw (0, _rxError.newRxError)('DOC19', {
       args: {
-        documentData: documentData,
-        existingPrimary: existingPrimary,
-        newPrimary: newPrimary
+        documentData,
+        existingPrimary,
+        newPrimary
       },
       schema: jsonSchema
     });
@@ -79,13 +78,13 @@ function getComposedPrimaryKeyOfDocumentData(jsonSchema, documentData) {
     return documentData[jsonSchema.primaryKey];
   }
   var compositePrimary = jsonSchema.primaryKey;
-  return compositePrimary.fields.map(function (field) {
-    var value = _objectPath["default"].get(documentData, field);
+  return compositePrimary.fields.map(field => {
+    var value = (0, _utils.getProperty)(documentData, field);
     if (typeof value === 'undefined') {
       throw (0, _rxError.newRxError)('DOC18', {
         args: {
-          field: field,
-          documentData: documentData
+          field,
+          documentData
         }
       });
     }
@@ -106,18 +105,7 @@ function getComposedPrimaryKeyOfDocumentData(jsonSchema, documentData) {
  * @return RxJsonSchema - ordered and filled
  */
 function normalizeRxJsonSchema(jsonSchema) {
-  // TODO do we need the deep clone() here?
-  var normalizedSchema = (0, _util.sortObject)((0, _util.clone)(jsonSchema));
-
-  // indexes must NOT be sorted because sort order is important here.
-  if (jsonSchema.indexes) {
-    normalizedSchema.indexes = Array.from(jsonSchema.indexes);
-  }
-
-  // primaryKey.fields must NOT be sorted because sort order is important here.
-  if (typeof normalizedSchema.primaryKey === 'object' && typeof jsonSchema.primaryKey === 'object') {
-    normalizedSchema.primaryKey.fields = jsonSchema.primaryKey.fields;
-  }
+  var normalizedSchema = (0, _utils.sortObject)(jsonSchema, true);
   return normalizedSchema;
 }
 
@@ -126,9 +114,9 @@ function normalizeRxJsonSchema(jsonSchema) {
  * @return cloned schemaObj
  */
 function fillWithDefaultSettings(schemaObj) {
-  schemaObj = (0, _util.flatClone)(schemaObj);
+  schemaObj = (0, _utils.flatClone)(schemaObj);
   var primaryPath = getPrimaryFieldOfPrimaryKey(schemaObj.primaryKey);
-  schemaObj.properties = (0, _util.flatClone)(schemaObj.properties);
+  schemaObj.properties = (0, _utils.flatClone)(schemaObj.properties);
 
   // additionalProperties is always false
   schemaObj.additionalProperties = false;
@@ -147,10 +135,6 @@ function fillWithDefaultSettings(schemaObj) {
   // encrypted must be array
   schemaObj.encrypted = schemaObj.encrypted ? schemaObj.encrypted.slice(0) : [];
 
-  /**
-   * TODO we should not need to add the internal fields to the schema.
-   * Better remove the fields before validation.
-   */
   // add _rev
   schemaObj.properties._rev = {
     type: 'string',
@@ -181,11 +165,7 @@ function fillWithDefaultSettings(schemaObj) {
 
   // final fields are always required
   var finalFields = getFinalFields(schemaObj);
-  schemaObj.required = schemaObj.required.concat(finalFields).filter(function (field) {
-    return !field.includes('.');
-  }).filter(function (elem, pos, arr) {
-    return arr.indexOf(elem) === pos;
-  }); // unique;
+  schemaObj.required = schemaObj.required.concat(finalFields).filter(field => !field.includes('.')).filter((elem, pos, arr) => arr.indexOf(elem) === pos); // unique;
 
   // version is 0 by default
   schemaObj.version = schemaObj.version || 0;
@@ -195,8 +175,8 @@ function fillWithDefaultSettings(schemaObj) {
    * All indexes must have the primaryKey to ensure a deterministic sort order.
    */
   if (schemaObj.indexes) {
-    schemaObj.indexes = schemaObj.indexes.map(function (index) {
-      var arIndex = (0, _util.isMaybeReadonlyArray)(index) ? index.slice(0) : [index];
+    schemaObj.indexes = schemaObj.indexes.map(index => {
+      var arIndex = (0, _utils.isMaybeReadonlyArray)(index) ? index.slice(0) : [index];
       if (!arIndex.includes(primaryPath)) {
         var modifiedIndex = arIndex.slice(0);
         modifiedIndex.push(primaryPath);
@@ -219,7 +199,7 @@ var RX_META_SCHEMA = {
       /**
        * We use 1 as minimum so that the value is never falsy.
        */
-      minimum: _util.RX_META_LWT_MINIMUM,
+      minimum: _utils.RX_META_LWT_MINIMUM,
       maximum: 1000000000000000,
       multipleOf: 0.01
     }
@@ -238,9 +218,7 @@ var RX_META_SCHEMA = {
  */
 exports.RX_META_SCHEMA = RX_META_SCHEMA;
 function getFinalFields(jsonSchema) {
-  var ret = Object.keys(jsonSchema.properties).filter(function (key) {
-    return jsonSchema.properties[key]["final"];
-  });
+  var ret = Object.keys(jsonSchema.properties).filter(key => jsonSchema.properties[key].final);
 
   // primary is also final
   var primaryPath = getPrimaryFieldOfPrimaryKey(jsonSchema.primaryKey);
@@ -248,9 +226,7 @@ function getFinalFields(jsonSchema) {
 
   // fields of composite primary are final
   if (typeof jsonSchema.primaryKey !== 'string') {
-    jsonSchema.primaryKey.fields.forEach(function (field) {
-      return ret.push(field);
-    });
+    jsonSchema.primaryKey.fields.forEach(field => ret.push(field));
   }
   return ret;
 }

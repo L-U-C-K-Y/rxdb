@@ -1574,7 +1574,7 @@
                 <a href="rx-storage-remote.html">
             
                     
-                    RxStorage Sharding
+                    RxStorage Remote
             
                 </a>
             
@@ -2256,7 +2256,7 @@
                                 
                                 <h1 id="sharedworker-rxstorage">SharedWorker RxStorage</h1>
 <p>The SharedWorker <a href="rx-storage.html">RxStorage</a> uses the <a href="https://developer.mozilla.org/en-US/docs/Web/API/SharedWorker" target="_blank">SharedWorker API</a> to run the storage inside of a separate JavaScript process <strong>in browsers</strong>. Compared to a normal <a href="rx-storage-worker.html">WebWorker</a>, the SharedWorker is created exactly once, even when there are multiple browser tabs opened. Because of having exactly one worker, multiple performance optimizations can be done because the storage itself does not have to handle multiple opened database connections.</p>
-<p><strong>NOTICE:</strong> This plugin is part of <a href="premium.md">RxDB premium</a>. It is not part of the default RxDB module.</p>
+<p><strong>NOTICE:</strong> This plugin is part of <a href="https://rxdb.info/premium.html" target="_blank">RxDB premium</a>. It is not part of the default RxDB module.</p>
 <h2 id="usage">Usage</h2>
 <h3 id="on-the-sharedworker-process">On the SharedWorker process</h3>
 <p>In the worker process JavaScript file, you have wrap the original RxStorage with <code>getRxStorageIndexedDB()</code>.</p>
@@ -2309,7 +2309,7 @@ exposeSharedWorkerRxStorage({
 <h2 id="pre-build-workers">Pre-build workers</h2>
 <p>The <code>shared-worker.js</code> must be a self containing JavaScript file that contains all dependencies in a bundle.
 To make it easier for you, RxDB ships with pre-bundles worker files that are ready to use.
-You can find them in the folder <code>node_modules/rxdb-premium/dist/workers</code> after you have installed the <a href="premium.html">RxDB Premium Plugin</a>. From there you can copy them to a location where it can be served from the webserver and then use their path to create the <code>RxDatabase</code></p>
+You can find them in the folder <code>node_modules/rxdb-premium/dist/workers</code> after you have installed the <a href="https://rxdb.info/premium.html" target="_blank">RxDB Premium Plugin</a>. From there you can copy them to a location where it can be served from the webserver and then use their path to create the <code>RxDatabase</code></p>
 <pre><code class="lang-ts"><span class="hljs-keyword">import</span> {
     createRxDatabase
 } from <span class="hljs-string">&apos;rxdb&apos;</span>;
@@ -2405,7 +2405,7 @@ await db.addCollections({
                 </a>
                 
                 
-                <a href="rx-storage-remote.html" class="navigation navigation-next " aria-label="Next page: RxStorage Sharding">
+                <a href="rx-storage-remote.html" class="navigation navigation-next " aria-label="Next page: RxStorage Remote">
                     <i class="fa fa-angle-right"></i>
                 </a>
                 
@@ -2416,7 +2416,7 @@ await db.addCollections({
     <script>
         var gitbook = gitbook || [];
         gitbook.push(function() {
-            gitbook.page.hasChanged({"page":{"title":"RxStorage Shared Worker","level":"1.19.8","depth":2,"next":{"title":"RxStorage Sharding","level":"1.19.9","depth":2,"path":"rx-storage-remote.md","ref":"./rx-storage-remote.md","articles":[]},"previous":{"title":"RxStorage Worker","level":"1.19.7","depth":2,"path":"rx-storage-worker.md","ref":"./rx-storage-worker.md","articles":[]},"dir":"ltr"},"config":{"plugins":["edit-link","github","custom-favicon","-sharing","expandable-chapters","scripts"],"root":".","styles":{"website":"styles/website.css","pdf":"styles/pdf.css","epub":"styles/epub.css","mobi":"styles/mobi.css","ebook":"styles/ebook.css","print":"styles/print.css"},"pluginsConfig":{"github":{"url":"https://github.com/pubkey/rxdb"},"scripts":{"files":["./analytics.js","./next-button.js"]},"search":{},"lunr":{"maxIndexSize":1000000,"ignoreSpecialCharacters":false},"fontsettings":{"theme":"white","family":"sans","size":2},"highlight":{},"favicon":"./files/logo/icon.ico","custom-favicon":{},"edit-link":{"label":"Edit This Page","base":"https://github.com/pubkey/rxdb/tree/master/docs-src"},"theme-default":{"styles":{"website":"styles/website.css","pdf":"styles/pdf.css","epub":"styles/epub.css","mobi":"styles/mobi.css","ebook":"styles/ebook.css","print":"styles/print.css"},"showLevel":false},"expandable-chapters":{}},"theme":"default","pdf":{"pageNumbers":true,"fontSize":12,"fontFamily":"Arial","paperSize":"a4","chapterMark":"pagebreak","pageBreaksBefore":"/","margin":{"right":62,"left":62,"top":56,"bottom":56}},"structure":{"langs":"LANGS.md","readme":"README.md","glossary":"GLOSSARY.md","summary":"SUMMARY.md"},"variables":{},"title":"RxDB - JavaScript Database","links":{"sidebar":{"RxDB":"/","Follow @twitter ":"https://twitter.com/intent/user?screen_name=rxdbjs","Chat @discord ":"https://discord.gg/tqt9ZttJfD","Star @github ":"https://github.com/pubkey/rxdb","Donate @github ":"https://github.com/sponsors/pubkey"}},"gitbook":"3.2.3"},"file":{"path":"rx-storage-shared-worker.md","mtime":"","type":"markdown"},"gitbook":{"version":"3.2.3","time":""},"basePath":".","book":{"language":""}});
+            gitbook.page.hasChanged({"page":{"title":"RxStorage Shared Worker","level":"1.19.8","depth":2,"next":{"title":"RxStorage Remote","level":"1.19.9","depth":2,"path":"rx-storage-remote.md","ref":"./rx-storage-remote.md","articles":[]},"previous":{"title":"RxStorage Worker","level":"1.19.7","depth":2,"path":"rx-storage-worker.md","ref":"./rx-storage-worker.md","articles":[]},"dir":"ltr"},"config":{"plugins":["edit-link","github","custom-favicon","-sharing","expandable-chapters","scripts"],"root":".","styles":{"website":"styles/website.css","pdf":"styles/pdf.css","epub":"styles/epub.css","mobi":"styles/mobi.css","ebook":"styles/ebook.css","print":"styles/print.css"},"pluginsConfig":{"github":{"url":"https://github.com/pubkey/rxdb"},"scripts":{"files":["./analytics.js","./next-button.js"]},"search":{},"lunr":{"maxIndexSize":1000000,"ignoreSpecialCharacters":false},"fontsettings":{"theme":"white","family":"sans","size":2},"highlight":{},"favicon":"./files/logo/icon.ico","custom-favicon":{},"edit-link":{"label":"Edit This Page","base":"https://github.com/pubkey/rxdb/tree/master/docs-src"},"theme-default":{"styles":{"website":"styles/website.css","pdf":"styles/pdf.css","epub":"styles/epub.css","mobi":"styles/mobi.css","ebook":"styles/ebook.css","print":"styles/print.css"},"showLevel":false},"expandable-chapters":{}},"theme":"default","pdf":{"pageNumbers":true,"fontSize":12,"fontFamily":"Arial","paperSize":"a4","chapterMark":"pagebreak","pageBreaksBefore":"/","margin":{"right":62,"left":62,"top":56,"bottom":56}},"structure":{"langs":"LANGS.md","readme":"README.md","glossary":"GLOSSARY.md","summary":"SUMMARY.md"},"variables":{},"title":"RxDB - JavaScript Database","links":{"sidebar":{"RxDB":"/","Follow @twitter ":"https://twitter.com/intent/user?screen_name=rxdbjs","Chat @discord ":"https://discord.gg/tqt9ZttJfD","Star @github ":"https://github.com/pubkey/rxdb","Donate @github ":"https://github.com/sponsors/pubkey"}},"gitbook":"3.2.3"},"file":{"path":"rx-storage-shared-worker.md","mtime":"","type":"markdown"},"gitbook":{"version":"3.2.3","time":""},"basePath":".","book":{"language":""}});
         });
     </script>
 </div>

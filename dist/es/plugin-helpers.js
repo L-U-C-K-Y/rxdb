@@ -1,5 +1,6 @@
 import { mergeMap } from 'rxjs/operators';
-import { fastUnsecureHash, flatClone, getFromMapOrThrow, requestIdleCallbackIfAvailable } from './util';
+import { getPrimaryFieldOfPrimaryKey } from './rx-schema-helper';
+import { fastUnsecureHash, flatClone, getFromMapOrThrow, requestIdleCallbackIfAvailable } from './plugins/utils';
 /**
  * cache the validators by the schema-hash
  * so we can reuse them when multiple collections have the same schema
@@ -33,36 +34,54 @@ validatorKey) {
     }
     return getFromMapOrThrow(VALIDATOR_CACHE, hash);
   }
-  return function (args) {
+  return args => {
     return Object.assign({}, args.storage, {
-      createStorageInstance: function createStorageInstance(params) {
-        try {
-          return Promise.resolve(args.storage.createStorageInstance(params)).then(function (instance) {
-            /**
-             * Lazy initialize the validator
-             * to save initial page load performance.
-             * Some libraries take really long to initialize the validator
-             * from the schema.
-             */
-            var validatorCached;
-            requestIdleCallbackIfAvailable(function () {
-              return validatorCached = initValidator(params.schema);
-            });
-            var oldBulkWrite = instance.bulkWrite.bind(instance);
-            instance.bulkWrite = function (documentWrites, context) {
-              if (!validatorCached) {
-                validatorCached = initValidator(params.schema);
-              }
-              documentWrites.forEach(function (row) {
-                validatorCached(row.document);
+      async createStorageInstance(params) {
+        var instance = await args.storage.createStorageInstance(params);
+        var primaryPath = getPrimaryFieldOfPrimaryKey(params.schema.primaryKey);
+
+        /**
+         * Lazy initialize the validator
+         * to save initial page load performance.
+         * Some libraries take really long to initialize the validator
+         * from the schema.
+         */
+        var validatorCached;
+        requestIdleCallbackIfAvailable(() => validatorCached = initValidator(params.schema));
+        var oldBulkWrite = instance.bulkWrite.bind(instance);
+        instance.bulkWrite = (documentWrites, context) => {
+          if (!validatorCached) {
+            validatorCached = initValidator(params.schema);
+          }
+          var errors = [];
+          var continueWrites = [];
+          documentWrites.forEach(row => {
+            var documentId = row.document[primaryPath];
+            var validationErrors = validatorCached(row.document);
+            if (validationErrors.length > 0) {
+              errors.push({
+                status: 422,
+                isError: true,
+                documentId,
+                writeRow: row,
+                validationErrors
               });
-              return oldBulkWrite(documentWrites, context);
-            };
-            return instance;
+            } else {
+              continueWrites.push(row);
+            }
           });
-        } catch (e) {
-          return Promise.reject(e);
-        }
+          var writePromise = continueWrites.length > 0 ? oldBulkWrite(continueWrites, context) : Promise.resolve({
+            error: {},
+            success: {}
+          });
+          return writePromise.then(writeResult => {
+            errors.forEach(validationError => {
+              writeResult.error[validationError.documentId] = validationError;
+            });
+            return writeResult;
+          });
+        };
+        return instance;
       }
     });
   };
@@ -72,247 +91,150 @@ validatorKey) {
  * Used in plugins to easily modify all in- and outgoing
  * data of that storage instance.
  */
-export function wrapRxStorageInstance(instance, modifyToStorage, modifyFromStorage) {
-  var errorFromStorage = function errorFromStorage(error) {
-    try {
-      var _temp5 = function _temp5() {
-        function _temp2() {
-          return Promise.resolve(fromStorage(ret.writeRow.document)).then(function (_fromStorage4) {
-            ret.writeRow.document = _fromStorage4;
-            return ret;
-          });
-        }
-        var _temp = function () {
-          if (ret.writeRow.previous) {
-            return Promise.resolve(fromStorage(ret.writeRow.previous)).then(function (_fromStorage3) {
-              ret.writeRow.previous = _fromStorage3;
-            });
-          }
-        }();
-        return _temp && _temp.then ? _temp.then(_temp2) : _temp2(_temp);
-      };
-      var ret = flatClone(error);
-      ret.writeRow = flatClone(ret.writeRow);
-      var _temp6 = function () {
-        if (ret.documentInDb) {
-          return Promise.resolve(fromStorage(ret.documentInDb)).then(function (_fromStorage2) {
-            ret.documentInDb = _fromStorage2;
-          });
-        }
-      }();
-      return Promise.resolve(_temp6 && _temp6.then ? _temp6.then(_temp5) : _temp5(_temp6));
-    } catch (e) {
-      return Promise.reject(e);
+export function wrapRxStorageInstance(instance, modifyToStorage, modifyFromStorage, modifyAttachmentFromStorage = v => v) {
+  async function toStorage(docData) {
+    if (!docData) {
+      return docData;
     }
-  };
-  var fromStorage = function fromStorage(docData) {
-    try {
-      if (!docData) {
-        return Promise.resolve(docData);
-      }
-      return Promise.resolve(modifyFromStorage(docData));
-    } catch (e) {
-      return Promise.reject(e);
+    return await modifyToStorage(docData);
+  }
+  async function fromStorage(docData) {
+    if (!docData) {
+      return docData;
     }
-  };
-  var toStorage = function toStorage(docData) {
-    try {
-      if (!docData) {
-        return Promise.resolve(docData);
-      }
-      return Promise.resolve(modifyToStorage(docData));
-    } catch (e) {
-      return Promise.reject(e);
+    return await modifyFromStorage(docData);
+  }
+  async function errorFromStorage(error) {
+    var ret = flatClone(error);
+    ret.writeRow = flatClone(ret.writeRow);
+    if (ret.documentInDb) {
+      ret.documentInDb = await fromStorage(ret.documentInDb);
     }
-  };
-  var modifyAttachmentFromStorage = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : function (v) {
-    return v;
-  };
-  var oldBulkWrite = instance.bulkWrite.bind(instance);
-  instance.bulkWrite = function (documentWrites, context) {
-    try {
+    if (ret.writeRow.previous) {
+      ret.writeRow.previous = await fromStorage(ret.writeRow.previous);
+    }
+    ret.writeRow.document = await fromStorage(ret.writeRow.document);
+    return ret;
+  }
+  var wrappedInstance = {
+    databaseName: instance.databaseName,
+    internals: instance.internals,
+    cleanup: instance.cleanup.bind(instance),
+    options: instance.options,
+    close: instance.close.bind(instance),
+    schema: instance.schema,
+    collectionName: instance.collectionName,
+    count: instance.count.bind(instance),
+    remove: instance.remove.bind(instance),
+    originalStorageInstance: instance,
+    bulkWrite: async (documentWrites, context) => {
       var useRows = [];
-      return Promise.resolve(Promise.all(documentWrites.map(function (row) {
-        try {
-          return Promise.resolve(Promise.all([row.previous ? toStorage(row.previous) : undefined, toStorage(row.document)])).then(function (_ref) {
-            var previous = _ref[0],
-              document = _ref[1];
-            useRows.push({
-              previous: previous,
-              document: document
-            });
-          });
-        } catch (e) {
-          return Promise.reject(e);
-        }
-      }))).then(function () {
-        return Promise.resolve(oldBulkWrite(useRows, context)).then(function (writeResult) {
-          var ret = {
-            success: {},
-            error: {}
-          };
-          var promises = [];
-          Object.entries(writeResult.success).forEach(function (_ref2) {
-            var k = _ref2[0],
-              v = _ref2[1];
-            promises.push(fromStorage(v).then(function (v2) {
-              return ret.success[k] = v2;
-            }));
-          });
-          Object.entries(writeResult.error).forEach(function (_ref3) {
-            var k = _ref3[0],
-              error = _ref3[1];
-            promises.push(errorFromStorage(error).then(function (err) {
-              return ret.error[k] = err;
-            }));
-          });
-          return Promise.resolve(Promise.all(promises)).then(function () {
-            return ret;
-          });
+      await Promise.all(documentWrites.map(async row => {
+        var [previous, document] = await Promise.all([row.previous ? toStorage(row.previous) : undefined, toStorage(row.document)]);
+        useRows.push({
+          previous,
+          document
         });
-      });
-    } catch (e) {
-      return Promise.reject(e);
-    }
-  };
-  var oldQuery = instance.query.bind(instance);
-  instance.query = function (preparedQuery) {
-    return oldQuery(preparedQuery).then(function (queryResult) {
-      return Promise.all(queryResult.documents.map(function (doc) {
-        return fromStorage(doc);
       }));
-    }).then(function (documents) {
-      return {
-        documents: documents
+      var writeResult = await instance.bulkWrite(useRows, context);
+      var ret = {
+        success: {},
+        error: {}
       };
-    });
-  };
-  var oldGetAttachmentData = instance.getAttachmentData.bind(instance);
-  instance.getAttachmentData = function (documentId, attachmentId) {
-    try {
-      return Promise.resolve(oldGetAttachmentData(documentId, attachmentId)).then(function (data) {
-        return Promise.resolve(modifyAttachmentFromStorage(data)).then(function (_modifyAttachmentFrom) {
-          data = _modifyAttachmentFrom;
-          return data;
-        });
+      var promises = [];
+      Object.entries(writeResult.success).forEach(([k, v]) => {
+        promises.push(fromStorage(v).then(v2 => ret.success[k] = v2));
       });
-    } catch (e) {
-      return Promise.reject(e);
-    }
-  };
-  var oldFindDocumentsById = instance.findDocumentsById.bind(instance);
-  instance.findDocumentsById = function (ids, deleted) {
-    return oldFindDocumentsById(ids, deleted).then(function (findResult) {
-      try {
+      Object.entries(writeResult.error).forEach(([k, error]) => {
+        promises.push(errorFromStorage(error).then(err => ret.error[k] = err));
+      });
+      await Promise.all(promises);
+      return ret;
+    },
+    query: preparedQuery => {
+      return instance.query(preparedQuery).then(queryResult => {
+        return Promise.all(queryResult.documents.map(doc => fromStorage(doc)));
+      }).then(documents => ({
+        documents: documents
+      }));
+    },
+    getAttachmentData: async (documentId, attachmentId) => {
+      var data = await instance.getAttachmentData(documentId, attachmentId);
+      data = await modifyAttachmentFromStorage(data);
+      return data;
+    },
+    findDocumentsById: (ids, deleted) => {
+      return instance.findDocumentsById(ids, deleted).then(async findResult => {
         var ret = {};
-        return Promise.resolve(Promise.all(Object.entries(findResult).map(function (_ref4) {
-          var key = _ref4[0],
-            doc = _ref4[1];
-          return Promise.resolve(fromStorage(doc)).then(function (_fromStorage) {
-            ret[key] = _fromStorage;
-          });
-        }))).then(function () {
-          return ret;
-        });
-      } catch (e) {
-        return Promise.reject(e);
-      }
-    });
-  };
-  var oldGetChangedDocumentsSince = instance.getChangedDocumentsSince.bind(instance);
-  instance.getChangedDocumentsSince = function (limit, checkpoint) {
-    return oldGetChangedDocumentsSince(limit, checkpoint).then(function (result) {
-      try {
-        var _result$checkpoint2 = result.checkpoint;
-        return Promise.resolve(Promise.all(result.documents.map(function (d) {
-          return fromStorage(d);
-        }))).then(function (_Promise$all) {
-          return {
-            checkpoint: _result$checkpoint2,
-            documents: _Promise$all
+        await Promise.all(Object.entries(findResult).map(async ([key, doc]) => {
+          ret[key] = await fromStorage(doc);
+        }));
+        return ret;
+      });
+    },
+    getChangedDocumentsSince: (limit, checkpoint) => {
+      return instance.getChangedDocumentsSince(limit, checkpoint).then(async result => {
+        return {
+          checkpoint: result.checkpoint,
+          documents: await Promise.all(result.documents.map(d => fromStorage(d)))
+        };
+      });
+    },
+    changeStream: () => {
+      return instance.changeStream().pipe(mergeMap(async eventBulk => {
+        var useEvents = await Promise.all(eventBulk.events.map(async event => {
+          var [documentData, previousDocumentData] = await Promise.all([fromStorage(event.documentData), fromStorage(event.previousDocumentData)]);
+          var ev = {
+            operation: event.operation,
+            eventId: event.eventId,
+            documentId: event.documentId,
+            endTime: event.endTime,
+            startTime: event.startTime,
+            documentData: documentData,
+            previousDocumentData: previousDocumentData,
+            isLocal: false
           };
-        });
-      } catch (e) {
-        return Promise.reject(e);
-      }
-    });
-  };
-  var oldChangeStream = instance.changeStream.bind(instance);
-  instance.changeStream = function () {
-    return oldChangeStream().pipe(mergeMap(function (eventBulk) {
-      try {
-        return Promise.resolve(Promise.all(eventBulk.events.map(function (event) {
-          try {
-            return Promise.resolve(Promise.all([fromStorage(event.documentData), fromStorage(event.previousDocumentData)])).then(function (_ref5) {
-              var documentData = _ref5[0],
-                previousDocumentData = _ref5[1];
-              var ev = {
-                operation: event.operation,
-                eventId: event.eventId,
-                documentId: event.documentId,
-                endTime: event.endTime,
-                startTime: event.startTime,
-                documentData: documentData,
-                previousDocumentData: previousDocumentData,
-                isLocal: false
-              };
-              return ev;
-            });
-          } catch (e) {
-            return Promise.reject(e);
+          return ev;
+        }));
+        var ret = {
+          id: eventBulk.id,
+          events: useEvents,
+          checkpoint: eventBulk.checkpoint,
+          context: eventBulk.context
+        };
+        return ret;
+      }));
+    },
+    conflictResultionTasks: () => {
+      return instance.conflictResultionTasks().pipe(mergeMap(async task => {
+        var assumedMasterState = await fromStorage(task.input.assumedMasterState);
+        var newDocumentState = await fromStorage(task.input.newDocumentState);
+        var realMasterState = await fromStorage(task.input.realMasterState);
+        return {
+          id: task.id,
+          context: task.context,
+          input: {
+            assumedMasterState,
+            realMasterState,
+            newDocumentState
           }
-        }))).then(function (useEvents) {
-          var ret = {
-            id: eventBulk.id,
-            events: useEvents,
-            checkpoint: eventBulk.checkpoint,
-            context: eventBulk.context
-          };
-          return ret;
-        });
-      } catch (e) {
-        return Promise.reject(e);
+        };
+      }));
+    },
+    resolveConflictResultionTask: taskSolution => {
+      if (taskSolution.output.isEqual) {
+        return instance.resolveConflictResultionTask(taskSolution);
       }
-    }));
-  };
-  var oldConflictResultionTasks = instance.conflictResultionTasks.bind(instance);
-  instance.conflictResultionTasks = function () {
-    return oldConflictResultionTasks().pipe(mergeMap(function (task) {
-      try {
-        return Promise.resolve(fromStorage(task.input.assumedMasterState)).then(function (assumedMasterState) {
-          return Promise.resolve(fromStorage(task.input.newDocumentState)).then(function (newDocumentState) {
-            return Promise.resolve(fromStorage(task.input.realMasterState)).then(function (realMasterState) {
-              return {
-                id: task.id,
-                context: task.context,
-                input: {
-                  assumedMasterState: assumedMasterState,
-                  realMasterState: realMasterState,
-                  newDocumentState: newDocumentState
-                }
-              };
-            });
-          });
-        });
-      } catch (e) {
-        return Promise.reject(e);
-      }
-    }));
-  };
-  var oldResolveConflictResultionTask = instance.resolveConflictResultionTask.bind(instance);
-  instance.resolveConflictResultionTask = function (taskSolution) {
-    if (taskSolution.output.isEqual) {
-      return oldResolveConflictResultionTask(taskSolution);
+      var useSolution = {
+        id: taskSolution.id,
+        output: {
+          isEqual: false,
+          documentData: taskSolution.output.documentData
+        }
+      };
+      return instance.resolveConflictResultionTask(useSolution);
     }
-    var useSolution = {
-      id: taskSolution.id,
-      output: {
-        isEqual: false,
-        documentData: taskSolution.output.documentData
-      }
-    };
-    return oldResolveConflictResultionTask(useSolution);
   };
-  return instance;
+  return wrappedInstance;
 }
 //# sourceMappingURL=plugin-helpers.js.map

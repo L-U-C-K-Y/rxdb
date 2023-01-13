@@ -22,11 +22,13 @@ import type {
     RxDocumentData,
     RxDocumentWriteData,
     RxJsonSchema,
-    RxStorageBulkWriteError,
+    RxStorageWriteError,
     RxStorageChangeEvent,
     RxStorageInstance,
     RxStorageInstanceCreationParams,
-    StringKeys
+    StringKeys,
+    RxStorageWriteErrorConflict,
+    RxStorageWriteErrorAttachment
 } from './types';
 import {
     createRevision,
@@ -38,7 +40,7 @@ import {
     getDefaultRxDocumentMeta,
     now,
     randomCouchString
-} from './util';
+} from './plugins/utils';
 
 export const INTERNAL_STORAGE_NAME = '_rxdb_internal';
 export const RX_DATABASE_LOCAL_DOCS_STORAGE_NAME = 'rxdatabase_storage_local';
@@ -119,14 +121,21 @@ export function throwIfIsStorageWriteError<RxDocType>(
     collection: RxCollection<RxDocType>,
     documentId: string,
     writeData: RxDocumentWriteData<RxDocType> | RxDocType,
-    error: RxStorageBulkWriteError<RxDocType> | undefined
+    error: RxStorageWriteError<RxDocType> | undefined
 ) {
     if (error) {
         if (error.status === 409) {
-            throw newRxError('COL19', {
+            throw newRxError('CONFLICT', {
                 collection: collection.name,
                 id: documentId,
-                error,
+                writeError: error,
+                data: writeData
+            });
+        } else if (error.status === 422) {
+            throw newRxError('VD2', {
+                collection: collection.name,
+                id: documentId,
+                writeError: error,
                 data: writeData
             });
         } else {
@@ -184,8 +193,8 @@ export function categorizeBulkWriteRows<RxDocType>(
      * each time we use it.
      */
     docsInDb:
-    Map<RxDocumentData<RxDocType>[StringKeys<RxDocType>] | string, RxDocumentData<RxDocType>> |
-    ById<RxDocumentData<RxDocType>>,
+        Map<RxDocumentData<RxDocType>[StringKeys<RxDocType>] | string, RxDocumentData<RxDocType>> |
+        ById<RxDocumentData<RxDocType>>,
     /**
      * The write rows that are passed to
      * RxStorageInstance().bulkWrite().
@@ -196,7 +205,7 @@ export function categorizeBulkWriteRows<RxDocType>(
     const hasAttachments = !!storageInstance.schema.attachments;
     const bulkInsertDocs: BulkWriteRowProcessed<RxDocType>[] = [];
     const bulkUpdateDocs: BulkWriteRowProcessed<RxDocType>[] = [];
-    const errors: ById<RxStorageBulkWriteError<RxDocType>> = {};
+    const errors: ById<RxStorageWriteError<RxDocType>> = {};
     const changedDocumentIds: RxDocType[StringKeys<RxDocType>][] = [];
     const eventBulk: EventBulk<RxStorageChangeEvent<RxDocumentData<RxDocType>>, any> = {
         id: randomCouchString(10),
@@ -228,7 +237,7 @@ export function categorizeBulkWriteRows<RxDocType>(
     bulkWriteRows.forEach(writeRow => {
         const id = writeRow.document[primaryPath];
         const documentInDb = docsByIdIsMap ? (docsInDb as any).get(id) : (docsInDb as any)[id];
-        let attachmentError: RxStorageBulkWriteError<RxDocType> | undefined;
+        let attachmentError: RxStorageWriteErrorAttachment<RxDocType> | undefined;
 
         if (!documentInDb) {
             /**
@@ -236,25 +245,28 @@ export function categorizeBulkWriteRows<RxDocType>(
              * this can happen on replication.
              */
             const insertedIsDeleted = writeRow.document._deleted ? true : false;
-            Object.entries(writeRow.document._attachments).forEach(([attachmentId, attachmentData]) => {
-                if (
-                    !(attachmentData as RxAttachmentWriteData).data
-                ) {
-                    attachmentError = {
-                        documentId: id as any,
-                        isError: true,
-                        status: 510,
-                        writeRow
-                    };
-                    errors[id as any] = attachmentError;
-                } else {
-                    attachmentsAdd.push({
-                        documentId: id as any,
-                        attachmentId,
-                        attachmentData: attachmentData as any
-                    });
-                }
-            });
+            if (hasAttachments) {
+                Object.entries(writeRow.document._attachments).forEach(([attachmentId, attachmentData]) => {
+                    if (
+                        !(attachmentData as RxAttachmentWriteData).data
+                    ) {
+                        attachmentError = {
+                            documentId: id as any,
+                            isError: true,
+                            status: 510,
+                            writeRow,
+                            attachmentId
+                        };
+                        errors[id as any] = attachmentError;
+                    } else {
+                        attachmentsAdd.push({
+                            documentId: id as any,
+                            attachmentId,
+                            attachmentData: attachmentData as any
+                        });
+                    }
+                });
+            }
             if (!attachmentError) {
                 if (hasAttachments) {
                     bulkInsertDocs.push(stripAttachmentsDataFromRow(writeRow));
@@ -292,7 +304,7 @@ export function categorizeBulkWriteRows<RxDocType>(
                 )
             ) {
                 // is conflict error
-                const err: RxStorageBulkWriteError<RxDocType> = {
+                const err: RxStorageWriteError<RxDocType> = {
                     isError: true,
                     status: 409,
                     documentId: id as any,
@@ -306,71 +318,75 @@ export function categorizeBulkWriteRows<RxDocType>(
             // handle attachments data
 
             const updatedRow: BulkWriteRowProcessed<RxDocType> = hasAttachments ? stripAttachmentsDataFromRow(writeRow) : writeRow as any;
-            if (writeRow.document._deleted) {
-                /**
-                 * Deleted documents must have cleared all their attachments.
-                 */
-                if (writeRow.previous) {
-                    Object
-                        .keys(writeRow.previous._attachments)
-                        .forEach(attachmentId => {
-                            attachmentsRemove.push({
-                                documentId: id as any,
-                                attachmentId
+            if (hasAttachments) {
+                if (writeRow.document._deleted) {
+                    /**
+                     * Deleted documents must have cleared all their attachments.
+                     */
+                    if (writeRow.previous) {
+                        Object
+                            .keys(writeRow.previous._attachments)
+                            .forEach(attachmentId => {
+                                attachmentsRemove.push({
+                                    documentId: id as any,
+                                    attachmentId
+                                });
                             });
-                        });
-                }
-            } else {
-                // first check for errors
-                Object
-                    .entries(writeRow.document._attachments)
-                    .find(([attachmentId, attachmentData]) => {
-                        const previousAttachmentData = writeRow.previous ? writeRow.previous._attachments[attachmentId] : undefined;
-                        if (
-                            !previousAttachmentData &&
-                            !(attachmentData as RxAttachmentWriteData).data
-                        ) {
-                            attachmentError = {
-                                documentId: id as any,
-                                documentInDb: documentInDb,
-                                isError: true,
-                                status: 510,
-                                writeRow
-                            };
-                        }
-                        return true;
-                    });
-                if (!attachmentError) {
+                    }
+                } else {
+                    // first check for errors
                     Object
                         .entries(writeRow.document._attachments)
-                        .forEach(([attachmentId, attachmentData]) => {
+                        .find(([attachmentId, attachmentData]) => {
                             const previousAttachmentData = writeRow.previous ? writeRow.previous._attachments[attachmentId] : undefined;
-                            if (!previousAttachmentData) {
-                                attachmentsAdd.push({
+                            if (
+                                !previousAttachmentData &&
+                                !(attachmentData as RxAttachmentWriteData).data
+                            ) {
+                                attachmentError = {
                                     documentId: id as any,
-                                    attachmentId,
-                                    attachmentData: attachmentData as any
-                                });
-                            } else {
-                                const newDigest = updatedRow.document._attachments[attachmentId].digest;
-                                if (
-                                    (attachmentData as RxAttachmentWriteData).data &&
-                                    /**
-                                     * Performance shortcut,
-                                     * do not update the attachment data if it did not change.
-                                     */
-                                    previousAttachmentData.digest !== newDigest
-                                ) {
-                                    attachmentsUpdate.push({
+                                    documentInDb,
+                                    isError: true,
+                                    status: 510,
+                                    writeRow,
+                                    attachmentId
+                                };
+                            }
+                            return true;
+                        });
+                    if (!attachmentError) {
+                        Object
+                            .entries(writeRow.document._attachments)
+                            .forEach(([attachmentId, attachmentData]) => {
+                                const previousAttachmentData = writeRow.previous ? writeRow.previous._attachments[attachmentId] : undefined;
+                                if (!previousAttachmentData) {
+                                    attachmentsAdd.push({
                                         documentId: id as any,
                                         attachmentId,
-                                        attachmentData: attachmentData as RxAttachmentWriteData
+                                        attachmentData: attachmentData as any
                                     });
+                                } else {
+                                    const newDigest = updatedRow.document._attachments[attachmentId].digest;
+                                    if (
+                                        (attachmentData as RxAttachmentWriteData).data &&
+                                        /**
+                                         * Performance shortcut,
+                                         * do not update the attachment data if it did not change.
+                                         */
+                                        previousAttachmentData.digest !== newDigest
+                                    ) {
+                                        attachmentsUpdate.push({
+                                            documentId: id as any,
+                                            attachmentId,
+                                            attachmentData: attachmentData as RxAttachmentWriteData
+                                        });
+                                    }
                                 }
-                            }
-                        });
+                            });
+                    }
                 }
             }
+
             if (attachmentError) {
                 errors[id as any] = attachmentError;
             } else {
@@ -498,6 +514,10 @@ export function getUniqueDeterministicEventKey(
 }
 
 
+export type WrappedRxStorageInstance<RxDocumentType, Internals, InstanceCreationOptions> = RxStorageInstance<RxDocumentType, any, InstanceCreationOptions> & {
+    originalStorageInstance: RxStorageInstance<RxDocumentType, Internals, InstanceCreationOptions>;
+};
+
 /**
  * Wraps the normal storageInstance of a RxCollection
  * to ensure that all access is properly using the hooks
@@ -517,7 +537,7 @@ export function getWrappedStorageInstance<
      * before it was mutated by hooks.
      */
     rxJsonSchema: RxJsonSchema<RxDocumentData<RxDocType>>
-): RxStorageInstance<RxDocType, Internals, InstanceCreationOptions> {
+): WrappedRxStorageInstance<RxDocType, Internals, InstanceCreationOptions> {
     overwritable.deepFreezeWhenDevMode(rxJsonSchema);
     const primaryPath = getPrimaryFieldOfPrimaryKey(rxJsonSchema.primaryKey);
 
@@ -588,8 +608,7 @@ export function getWrappedStorageInstance<
          * stored into the storage, use this.originalStorageInstance.bulkWrite() instead.
          */
         data._rev = createRevision(
-            database.hashFunction,
-            data,
+            database.token,
             writeRow.previous
         );
 
@@ -599,7 +618,8 @@ export function getWrappedStorageInstance<
         };
     }
 
-    const ret: RxStorageInstance<RxDocType, Internals, InstanceCreationOptions> = {
+    const ret: WrappedRxStorageInstance<RxDocType, Internals, InstanceCreationOptions> = {
+        originalStorageInstance: storageInstance,
         schema: storageInstance.schema,
         internals: storageInstance.internals,
         collectionName: storageInstance.collectionName,
@@ -627,7 +647,7 @@ export function getWrappedStorageInstance<
                  * @link https://github.com/pubkey/rxdb/pull/3839
                  */
                 .then(writeResult => {
-                    const reInsertErrors: RxStorageBulkWriteError<RxDocType>[] = Object
+                    const reInsertErrors: RxStorageWriteErrorConflict<RxDocType>[] = Object
                         .values(writeResult.error)
                         .filter((error) => {
                             if (
@@ -639,7 +659,7 @@ export function getWrappedStorageInstance<
                                 return true;
                             }
                             return false;
-                        });
+                        }) as any;
 
                     if (reInsertErrors.length > 0) {
                         const useWriteResult: typeof writeResult = {
@@ -656,8 +676,7 @@ export function getWrappedStorageInstance<
                                         error.writeRow.document,
                                         {
                                             _rev: createRevision(
-                                                database.hashFunction,
-                                                error.writeRow.document,
+                                                database.token,
                                                 error.documentInDb
                                             )
                                         }
@@ -764,8 +783,6 @@ export function getWrappedStorageInstance<
             });
         }
     };
-
-    (ret as any).originalStorageInstance = storageInstance;
 
     return ret;
 }

@@ -3,8 +3,20 @@ const TerserPlugin = require('terser-webpack-plugin');
 const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin;
 
 
-//console.log(process.env.NODE_ENV);
-//process.exit();
+/**
+ * Throw on bailouts.
+ * If a dependency is causing a bailout,
+ * it must be replaced!
+ */
+const oldConsoleLog = console.log.bind(console);
+console.log = function (m1, m2, m3) {
+    if (m1.includes('not an ECMAScript module')) {
+        oldConsoleLog(m1);
+        throw new Error('ERROR: A dependency of RxDB is causing an optimization bailout. This is not allowed.');
+    } else {
+        return oldConsoleLog(m1, m2, m3);
+    }
+};
 
 
 const plugins = [];
@@ -26,6 +38,10 @@ module.exports = {
         filename: 'webpack.bundle.js'
     },
     stats: {
-        warnings: false
+        /**
+         * @link https://webpack.js.org/plugins/module-concatenation-plugin/#debugging-optimization-bailouts
+         */
+        optimizationBailout: true,
+        warnings: true
     }
 };

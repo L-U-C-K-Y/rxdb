@@ -7,18 +7,18 @@ The storage migration plugin can be used to migrate all data from one existing R
 
 The storage migration **drops deleted documents** and filters them out during the migration.
 
-**NOTICE:** The storage migration plugin is part of [RxDB premium](./premium.md). It is not part of the default RxDB module.
+**NOTICE:** The storage migration plugin is part of [RxDB premium](https://rxdb.info/premium.html). It is not part of the default RxDB module.
 
 
 ## Usage
 
-Lets say you want to migrate from PouchDB to the [Dexie.js](./rx-storage-dexie.md) RxStorage.
+Lets say you want to migrate from LokiJs to the [Dexie.js](./rx-storage-dexie.md) RxStorage.
 
 ```ts
 import {
-    getRxStoragePouch
-} from 'rxdb/plugins/pouchdb';
-import { getRxStorageDexie } from 'rxdb/plugins/dexie';
+    getRxStorageLoki
+} from 'rxdb/plugins/storage-loki';
+import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 
 // create the new RxDatabase
 const db = await createRxDatabase<RxStylechaseCollections>({
@@ -35,7 +35,7 @@ await migrateStorage(
      * new database has a different name.
      */
     'myOldDatabaseName',
-    getRxStoragePouch(), // RxStorage of the old database
+    getRxStorageLoki(), // RxStorage of the old database
     500, // batch size
     // 
     (input: AfterMigrateBatchHandlerInput) => {
@@ -62,8 +62,8 @@ The you can run the migration by providing the old storage:
 ```ts
 /* ... */
 import {
-    getRxStoragePouch
-} from 'rxdb-old/plugins/pouchdb'; // <- import from the old RxDB version
+    getRxStorageLoki
+} from 'rxdb-old/plugins/storage-loki'; // <- import from the old RxDB version
 
 await migrateStorage(
     db as any,
@@ -73,7 +73,7 @@ await migrateStorage(
      * new database has a different name.
      */
     'myOldDatabaseName',
-    getRxStoragePouch(), // RxStorage of the old database
+    getRxStorageLoki(), // RxStorage of the old database
     500, // batch size
     // 
     (input: AfterMigrateBatchHandlerInput) => {

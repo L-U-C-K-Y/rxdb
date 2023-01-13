@@ -5,13 +5,12 @@ This storage is based on [SQLite](https://www.sqlite.org/index.html) and is made
 
 ### Pros
 
-- Much faster compared to the PouchDB+SQLite `RxStorage`
+- Fast
 - Small build size
 
 ### Cons
 
-- It is part of [RxDB Premium](./premium.md)
-- At the moment it is not possible to use regex queries with the SQLite RxStorage.
+- It is part of [RxDB Premium](https://rxdb.info/premium.html)
 
 ### Requirements
 
@@ -26,7 +25,7 @@ import {
 import {
     getRxStorageSQLite,
     getSQLiteBasicsNode
-} from 'rxdb-premium/plugins/sqlite';
+} from 'rxdb-premium/plugins/storage-sqlite';
 
 /**
  * In Node.js, we get use the SQLite database
@@ -62,7 +61,7 @@ import {
 import {
     getRxStorageSQLite,
     getSQLiteBasicsQuickSQLite
-} from 'rxdb-premium/plugins/sqlite';
+} from 'rxdb-premium/plugins/storage-sqlite';
 import { open } from 'react-native-quick-sqlite';
 
 // create database
@@ -101,7 +100,7 @@ import {
 import {
     getRxStorageSQLite,
     getSQLiteBasicsCapacitor
-} from 'rxdb-premium/plugins/sqlite';
+} from 'rxdb-premium/plugins/storage-sqlite';
 
 /**
  * Import SQLite from the capacitor plugin.

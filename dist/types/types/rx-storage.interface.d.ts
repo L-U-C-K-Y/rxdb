@@ -23,7 +23,8 @@ import type {
     Override,
     RxConflictResultionTask,
     RxConflictResultionTaskSolution,
-    RxJsonSchema
+    RxJsonSchema,
+    RxQueryPlan
 } from './';
 import type {
     Observable
@@ -32,11 +33,10 @@ import type {
 /**
  * RxStorage
  * This is an interface that abstracts the storage engine.
- * This allows us to use RxDB with different engines like PouchDB or LokiJS.
+ * This allows us to use RxDB with different storage engines.
  *
- * Also see
+ * @link https://rxdb.info/rx-storage.html
  * @link https://github.com/pubkey/rxdb/issues/1636
- *
  */
 
 
@@ -63,9 +63,8 @@ export interface RxStorage<Internals, InstanceCreationOptions> {
     readonly statics: RxStorageStatics;
 
     /**
-     * creates a storage instance
-     * that can contain the internal database
-     * For example the PouchDB instance
+     * Creates a storage instance
+     * that can contain the NoSQL documents of a collection.
      */
     createStorageInstance<RxDocType>(
         params: RxStorageInstanceCreationParams<RxDocType, InstanceCreationOptions>
@@ -119,7 +118,7 @@ MangoQuery<RxDocType>,
  */
 export type RxStorageStatics = Readonly<{
     /**
-     * PouchDB and others have some bugs
+     * Storages can have some bugs
      * and behaviors that must be worked around
      * before querying the db.
      *
@@ -170,6 +169,10 @@ export type RxStorageStatics = Readonly<{
     checkpointSchema: DeepReadonly<JsonSchema>;
 }>;
 
+export type DefaultPreparedQuery<RxDocType> = {
+    query: FilledMangoQuery<RxDocType>;
+    queryPlan: RxQueryPlan;
+};
 
 export interface RxStorageInstance<
     /**
@@ -186,7 +189,6 @@ export interface RxStorageInstance<
     readonly databaseName: string;
     /**
      * Returns the internal data that is used by the storage engine.
-     * For example the pouchdb instance.
      */
     readonly internals: Readonly<Internals>;
     readonly options: Readonly<InstanceCreationOptions>;
@@ -246,10 +248,7 @@ export interface RxStorageInstance<
      * and returns the found documents data.
      * Having all storage instances behave similar
      * is likely the most difficult thing when creating a new
-     * rx-storage implementation. Atm we use the pouchdb-find plugin
-     * as reference to how NoSQL-queries must work.
-     * But the past has shown that pouchdb find can behave wrong,
-     * which must be fixed or at least documented.
+     * rx-storage implementation.
      */
     query(
         /**

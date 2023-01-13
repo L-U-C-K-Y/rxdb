@@ -17,7 +17,7 @@ The main reason to use this is to improve initial page load and query/write time
 - Because it has to await an initial replication from the parent storage into the memory, initial page load time can increase when much data is already stored. This is likely not a problem when you store less then `10k` documents.
 
 
-**NOTICE:** The `memory-synced` plugin is part of [RxDB premium](./premium.md). It is not part of the default RxDB module.
+**NOTICE:** The `memory-synced` plugin is part of [RxDB premium](https://rxdb.info/premium.html). It is not part of the default RxDB module.
 
 ## Usage
 
@@ -26,10 +26,10 @@ The main reason to use this is to improve initial page load and query/write time
 
 import {
     getRxStorageIndexedDB
-} from 'rxdb-premium/plugins/indexeddb';
+} from 'rxdb-premium/plugins/storage-indexeddb';
 import {
     getMemorySyncedRxStorage
-} from 'rxdb-premium/plugins/memory-synced';
+} from 'rxdb-premium/plugins/storage-memory-synced';
 
 /**
  * Here we use the IndexedDB RxStorage as persistence storage.

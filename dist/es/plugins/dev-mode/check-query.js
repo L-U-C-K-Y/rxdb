@@ -1,7 +1,7 @@
-import deepEqual from 'fast-deep-equal';
 import { newRxError, newRxTypeError } from '../../rx-error';
 import { massageSelector } from 'pouchdb-selector-core';
-import { RxStorageDexieStatics } from '../dexie';
+import { RxStorageDexieStatics } from '../storage-dexie';
+import { deepEqual } from '../utils';
 
 /**
  * accidentally passing a non-valid object into the query params
@@ -18,15 +18,15 @@ export function checkQuery(args) {
     });
   }
   var validKeys = ['selector', 'limit', 'skip', 'sort', 'index'];
-  Object.keys(args.queryObj).forEach(function (key) {
+  Object.keys(args.queryObj).forEach(key => {
     if (!validKeys.includes(key)) {
       throw newRxTypeError('QU11', {
         op: args.op,
         collection: args.collection.name,
         queryObj: args.queryObj,
-        key: key,
+        key,
         args: {
-          validKeys: validKeys
+          validKeys
         }
       });
     }
@@ -51,21 +51,18 @@ export function checkMangoQuery(args) {
   var schemaTopLevelFields = Object.keys(schema.properties);
   Object.keys(massagedSelector)
   // do not check operators
-  .filter(function (fieldOrOperator) {
-    return !fieldOrOperator.startsWith('$');
-  })
+  .filter(fieldOrOperator => !fieldOrOperator.startsWith('$'))
   // skip this check on non-top-level fields
-  .filter(function (field) {
-    return !field.includes('.');
-  }).forEach(function (field) {
+  .filter(field => !field.includes('.')).forEach(field => {
     if (!schemaTopLevelFields.includes(field)) {
       throw newRxError('QU13', {
-        schema: schema,
-        field: field,
+        schema,
+        field,
         query: args.mangoQuery
       });
     }
   });
+
   /**
    * ensure if custom index is set,
    * it is also defined in the schema
@@ -73,14 +70,12 @@ export function checkMangoQuery(args) {
   var schemaIndexes = schema.indexes ? schema.indexes : [];
   var index = args.mangoQuery.index;
   if (index) {
-    var isInSchema = schemaIndexes.find(function (schemaIndex) {
-      return deepEqual(schemaIndex, index);
-    });
+    var isInSchema = schemaIndexes.find(schemaIndex => deepEqual(schemaIndex, index));
     if (!isInSchema) {
       throw newRxError('QU12', {
         collection: args.rxQuery.collection.name,
         query: args.mangoQuery,
-        schema: schema
+        schema
       });
     }
   }
@@ -96,6 +91,22 @@ export function checkMangoQuery(args) {
         query: args.mangoQuery
       });
     }
+  }
+
+  /**
+   * Ensure that sort only runs on known fields
+   * TODO also check nested fields
+   */
+  if (args.mangoQuery.sort) {
+    args.mangoQuery.sort.map(sortPart => Object.keys(sortPart)[0]).filter(field => !field.includes('.')).forEach(field => {
+      if (!schemaTopLevelFields.includes(field)) {
+        throw newRxError('QU13', {
+          schema,
+          field,
+          query: args.mangoQuery
+        });
+      }
+    });
   }
 }
 export function areSelectorsSatisfiedByIndex(schema, query) {

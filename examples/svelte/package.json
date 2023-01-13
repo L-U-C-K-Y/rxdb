@@ -11,24 +11,23 @@
     "test": "npm run build && concurrently \"npm run start\" \"npm run test:e2e\" --kill-others --success first"
   },
   "devDependencies": {
-    "@rollup/plugin-commonjs": "21.1.0",
-    "@rollup/plugin-node-resolve": "13.3.0",
+    "@rollup/plugin-commonjs": "24.0.0",
+    "@rollup/plugin-node-resolve": "15.0.1",
     "async-test-util": "2.0.0",
-    "concurrently": "7.5.0",
-    "pouchdb-adapter-idb": "7.2.2",
-    "rollup": "2.77.2",
-    "rollup-plugin-css-only": "3.1.0",
+    "concurrently": "7.6.0",
+    "rollup": "2.79.1",
+    "rollup-plugin-css-only": "4.3.0",
     "rollup-plugin-livereload": "2.0.5",
     "rollup-plugin-node-builtins": "2.1.2",
     "rollup-plugin-svelte": "7.1.0",
     "rollup-plugin-terser": "7.0.2",
     "rxdb": "file:rxdb-local.tgz",
-    "rxjs": "7.5.7",
-    "svelte": "3.49.0",
+    "rxjs": "7.8.0",
+    "svelte": "3.55.1",
     "testcafe": "1.20.1"
   },
   "dependencies": {
-    "@rollup/plugin-json": "4.1.0",
+    "@rollup/plugin-json": "6.0.0",
     "sirv-cli": "1.0.14"
   }
 }

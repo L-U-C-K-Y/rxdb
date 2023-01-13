@@ -1,6 +1,6 @@
 import { newRxError, newRxTypeError } from '../../rx-error';
 import { rxDatabaseProperties } from './entity-properties';
-import { isFolderPath } from '../../util';
+import { isFolderPath } from '../../plugins/utils';
 
 /**
  * if the name of a collection
@@ -46,7 +46,7 @@ var validCouchDBStringRegex = new RegExp(validCouchDBStringRegexStr);
 export function validateDatabaseName(name) {
   if (typeof name !== 'string' || name.length === 0) {
     throw newRxTypeError('UT1', {
-      name: name
+      name
     });
   }
 

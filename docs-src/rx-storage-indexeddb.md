@@ -11,7 +11,7 @@ The IndexedDB `RxStorage` is based on plain IndexedDB and can be used in browser
 
 ### Cons
 
-- It is part of the [RxDB Premium](./premium.md) plugin that must be purchased.
+- It is part of the [RxDB Premium](https://rxdb.info/premium.html) plugin that must be purchased.
 - Does not support CouchDB replication.
 - Only runs on runtimes that support [IndexedDB v2](https://caniuse.com/indexeddb2), so it does not work on Internet Explorer. 
 
@@ -24,7 +24,7 @@ import {
 } from 'rxdb';
 import {
     getRxStorageIndexedDB
-} from 'rxdb-premium/plugins/indexeddb';
+} from 'rxdb-premium/plugins/storage-indexeddb';
 
 const db = await createRxDatabase({
     name: 'exampledb',
@@ -34,9 +34,9 @@ const db = await createRxDatabase({
          * You can change the batchSize to optimize the query time
          * for specific queries.
          * You should only change this value when you are also doing performance measurements.
-         * [default=50]
+         * [default=300]
          */
-        batchSize: 50
+        batchSize: 300
     })
 });
 ```
@@ -49,7 +49,7 @@ You can do that by using the [fake-indexeddb](https://github.com/dumbmatter/fake
 
 ```ts
 import { createRxDatabase } from 'rxdb';
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/indexeddb';
+import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
 
 //> npm install fake-indexeddb --save
 const fakeIndexedDB = require('fake-indexeddb');

@@ -5,21 +5,19 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX = void 0;
 exports.graphQLRequest = graphQLRequest;
-var _util = require("../../util");
-var GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX = 'rxdb-replication-graphql-';
+var _utils = require("../../plugins/utils");
+var GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX = 'graphql';
 exports.GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX = GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX;
 function graphQLRequest(httpUrl, clientState, queryParams) {
   var headers = new Headers(clientState.headers || {});
   headers.append('Content-Type', 'application/json');
-  var req = new Request((0, _util.ensureNotFalsy)(httpUrl), {
+  var req = new Request((0, _utils.ensureNotFalsy)(httpUrl), {
     method: 'POST',
     body: JSON.stringify(queryParams),
-    headers: headers,
+    headers,
     credentials: clientState.credentials
   });
-  return fetch(req).then(function (res) {
-    return res.json();
-  }).then(function (body) {
+  return fetch(req).then(res => res.json()).then(body => {
     return body;
   });
 }

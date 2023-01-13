@@ -5,26 +5,33 @@
 import { overwritable } from './overwritable';
 import { newRxError } from './rx-error';
 import { fillPrimaryKey, getPrimaryFieldOfPrimaryKey } from './rx-schema-helper';
-import { createRevision, defaultHashFunction, ensureNotFalsy, firstPropertyValueOfObject, flatClone, getDefaultRevision, getDefaultRxDocumentMeta, now, randomCouchString } from './util';
+import { createRevision, defaultHashFunction, ensureNotFalsy, firstPropertyValueOfObject, flatClone, getDefaultRevision, getDefaultRxDocumentMeta, now, randomCouchString } from './plugins/utils';
+export var INTERNAL_STORAGE_NAME = '_rxdb_internal';
+export var RX_DATABASE_LOCAL_DOCS_STORAGE_NAME = 'rxdatabase_storage_local';
+export async function getSingleDocument(storageInstance, documentId) {
+  var results = await storageInstance.findDocumentsById([documentId], false);
+  var doc = results[documentId];
+  if (doc) {
+    return doc;
+  } else {
+    return null;
+  }
+}
+
 /**
  * Writes a single document,
  * throws RxStorageBulkWriteError on failure
  */
-export var writeSingle = function writeSingle(instance, writeRow, context) {
-  try {
-    return Promise.resolve(instance.bulkWrite([writeRow], context)).then(function (writeResult) {
-      if (Object.keys(writeResult.error).length > 0) {
-        var error = firstPropertyValueOfObject(writeResult.error);
-        throw error;
-      } else {
-        var ret = firstPropertyValueOfObject(writeResult.success);
-        return ret;
-      }
-    });
-  } catch (e) {
-    return Promise.reject(e);
+export async function writeSingle(instance, writeRow, context) {
+  var writeResult = await instance.bulkWrite([writeRow], context);
+  if (Object.keys(writeResult.error).length > 0) {
+    var error = firstPropertyValueOfObject(writeResult.error);
+    throw error;
+  } else {
+    var ret = firstPropertyValueOfObject(writeResult.success);
+    return ret;
   }
-};
+}
 
 /**
  * Checkpoints must be stackable over another.
@@ -32,24 +39,8 @@ export var writeSingle = function writeSingle(instance, writeRow, context) {
  * like the sharding plugin, where a checkpoint only represents
  * the document state from some, but not all shards.
  */
-export var getSingleDocument = function getSingleDocument(storageInstance, documentId) {
-  try {
-    return Promise.resolve(storageInstance.findDocumentsById([documentId], false)).then(function (results) {
-      var doc = results[documentId];
-      if (doc) {
-        return doc;
-      } else {
-        return null;
-      }
-    });
-  } catch (e) {
-    return Promise.reject(e);
-  }
-};
-export var INTERNAL_STORAGE_NAME = '_rxdb_internal';
-export var RX_DATABASE_LOCAL_DOCS_STORAGE_NAME = 'rxdatabase_storage_local';
 export function stackCheckpoints(checkpoints) {
-  return Object.assign.apply(Object, [{}].concat(checkpoints));
+  return Object.assign({}, ...checkpoints);
 }
 export function storageChangeEventToRxChangeEvent(isLocal, rxStorageChangeEvent, rxCollection) {
   var documentData = rxStorageChangeEvent.documentData;
@@ -60,7 +51,7 @@ export function storageChangeEventToRxChangeEvent(isLocal, rxStorageChangeEvent,
     collectionName: rxCollection ? rxCollection.name : undefined,
     startTime: rxStorageChangeEvent.startTime,
     endTime: rxStorageChangeEvent.endTime,
-    isLocal: isLocal,
+    isLocal,
     operation: rxStorageChangeEvent.operation,
     documentData: overwritable.deepFreezeWhenDevMode(documentData),
     previousDocumentData: overwritable.deepFreezeWhenDevMode(previousDocumentData)
@@ -70,10 +61,17 @@ export function storageChangeEventToRxChangeEvent(isLocal, rxStorageChangeEvent,
 export function throwIfIsStorageWriteError(collection, documentId, writeData, error) {
   if (error) {
     if (error.status === 409) {
-      throw newRxError('COL19', {
+      throw newRxError('CONFLICT', {
         collection: collection.name,
         id: documentId,
-        error: error,
+        writeError: error,
+        data: writeData
+      });
+    } else if (error.status === 422) {
+      throw newRxError('VD2', {
+        collection: collection.name,
+        id: documentId,
+        writeError: error,
         data: writeData
       });
     } else {
@@ -90,7 +88,7 @@ export function throwIfIsStorageWriteError(collection, documentId, writeData, er
  */
 export function getNewestOfDocumentStates(primaryPath, docs) {
   var ret = null;
-  docs.forEach(function (doc) {
+  docs.forEach(doc => {
     if (!ret || doc._meta.lwt > ret._meta.lwt || doc._meta.lwt === ret._meta.lwt && doc[primaryPath] > ret[primaryPath]) {
       ret = doc;
     }
@@ -131,14 +129,14 @@ bulkWriteRows, context) {
     id: randomCouchString(10),
     events: [],
     checkpoint: null,
-    context: context
+    context
   };
   var attachmentsAdd = [];
   var attachmentsRemove = [];
   var attachmentsUpdate = [];
   var startTime = now();
   var docsByIdIsMap = typeof docsInDb.get === 'function';
-  bulkWriteRows.forEach(function (writeRow) {
+  bulkWriteRows.forEach(writeRow => {
     var id = writeRow.document[primaryPath];
     var documentInDb = docsByIdIsMap ? docsInDb.get(id) : docsInDb[id];
     var attachmentError;
@@ -148,25 +146,26 @@ bulkWriteRows, context) {
        * this can happen on replication.
        */
       var insertedIsDeleted = writeRow.document._deleted ? true : false;
-      Object.entries(writeRow.document._attachments).forEach(function (_ref) {
-        var attachmentId = _ref[0],
-          attachmentData = _ref[1];
-        if (!attachmentData.data) {
-          attachmentError = {
-            documentId: id,
-            isError: true,
-            status: 510,
-            writeRow: writeRow
-          };
-          errors[id] = attachmentError;
-        } else {
-          attachmentsAdd.push({
-            documentId: id,
-            attachmentId: attachmentId,
-            attachmentData: attachmentData
-          });
-        }
-      });
+      if (hasAttachments) {
+        Object.entries(writeRow.document._attachments).forEach(([attachmentId, attachmentData]) => {
+          if (!attachmentData.data) {
+            attachmentError = {
+              documentId: id,
+              isError: true,
+              status: 510,
+              writeRow,
+              attachmentId
+            };
+            errors[id] = attachmentError;
+          } else {
+            attachmentsAdd.push({
+              documentId: id,
+              attachmentId,
+              attachmentData: attachmentData
+            });
+          }
+        });
+      }
       if (!attachmentError) {
         if (hasAttachments) {
           bulkInsertDocs.push(stripAttachmentsDataFromRow(writeRow));
@@ -182,7 +181,7 @@ bulkWriteRows, context) {
           operation: 'INSERT',
           documentData: hasAttachments ? stripAttachmentsDataFromDocument(writeRow.document) : writeRow.document,
           previousDocumentData: hasAttachments && writeRow.previous ? stripAttachmentsDataFromDocument(writeRow.previous) : writeRow.previous,
-          startTime: startTime,
+          startTime,
           endTime: now()
         });
       }
@@ -200,7 +199,7 @@ bulkWriteRows, context) {
           status: 409,
           documentId: id,
           writeRow: writeRow,
-          documentInDb: documentInDb
+          documentInDb
         };
         errors[id] = err;
         return;
@@ -209,62 +208,61 @@ bulkWriteRows, context) {
       // handle attachments data
 
       var updatedRow = hasAttachments ? stripAttachmentsDataFromRow(writeRow) : writeRow;
-      if (writeRow.document._deleted) {
-        /**
-         * Deleted documents must have cleared all their attachments.
-         */
-        if (writeRow.previous) {
-          Object.keys(writeRow.previous._attachments).forEach(function (attachmentId) {
-            attachmentsRemove.push({
-              documentId: id,
-              attachmentId: attachmentId
-            });
-          });
-        }
-      } else {
-        // first check for errors
-        Object.entries(writeRow.document._attachments).find(function (_ref2) {
-          var attachmentId = _ref2[0],
-            attachmentData = _ref2[1];
-          var previousAttachmentData = writeRow.previous ? writeRow.previous._attachments[attachmentId] : undefined;
-          if (!previousAttachmentData && !attachmentData.data) {
-            attachmentError = {
-              documentId: id,
-              documentInDb: documentInDb,
-              isError: true,
-              status: 510,
-              writeRow: writeRow
-            };
-          }
-          return true;
-        });
-        if (!attachmentError) {
-          Object.entries(writeRow.document._attachments).forEach(function (_ref3) {
-            var attachmentId = _ref3[0],
-              attachmentData = _ref3[1];
-            var previousAttachmentData = writeRow.previous ? writeRow.previous._attachments[attachmentId] : undefined;
-            if (!previousAttachmentData) {
-              attachmentsAdd.push({
+      if (hasAttachments) {
+        if (writeRow.document._deleted) {
+          /**
+           * Deleted documents must have cleared all their attachments.
+           */
+          if (writeRow.previous) {
+            Object.keys(writeRow.previous._attachments).forEach(attachmentId => {
+              attachmentsRemove.push({
                 documentId: id,
-                attachmentId: attachmentId,
-                attachmentData: attachmentData
+                attachmentId
               });
-            } else {
-              var newDigest = updatedRow.document._attachments[attachmentId].digest;
-              if (attachmentData.data &&
-              /**
-               * Performance shortcut,
-               * do not update the attachment data if it did not change.
-               */
-              previousAttachmentData.digest !== newDigest) {
-                attachmentsUpdate.push({
+            });
+          }
+        } else {
+          // first check for errors
+          Object.entries(writeRow.document._attachments).find(([attachmentId, attachmentData]) => {
+            var previousAttachmentData = writeRow.previous ? writeRow.previous._attachments[attachmentId] : undefined;
+            if (!previousAttachmentData && !attachmentData.data) {
+              attachmentError = {
+                documentId: id,
+                documentInDb,
+                isError: true,
+                status: 510,
+                writeRow,
+                attachmentId
+              };
+            }
+            return true;
+          });
+          if (!attachmentError) {
+            Object.entries(writeRow.document._attachments).forEach(([attachmentId, attachmentData]) => {
+              var previousAttachmentData = writeRow.previous ? writeRow.previous._attachments[attachmentId] : undefined;
+              if (!previousAttachmentData) {
+                attachmentsAdd.push({
                   documentId: id,
-                  attachmentId: attachmentId,
+                  attachmentId,
                   attachmentData: attachmentData
                 });
+              } else {
+                var newDigest = updatedRow.document._attachments[attachmentId].digest;
+                if (attachmentData.data &&
+                /**
+                 * Performance shortcut,
+                 * do not update the attachment data if it did not change.
+                 */
+                previousAttachmentData.digest !== newDigest) {
+                  attachmentsUpdate.push({
+                    documentId: id,
+                    attachmentId,
+                    attachmentData: attachmentData
+                  });
+                }
               }
-            }
-          });
+            });
+          }
         }
       }
       if (attachmentError) {
@@ -290,7 +288,7 @@ bulkWriteRows, context) {
       } else {
         throw newRxError('SNH', {
           args: {
-            writeRow: writeRow
+            writeRow
           }
         });
       }
@@ -301,20 +299,20 @@ bulkWriteRows, context) {
         documentData: ensureNotFalsy(eventDocumentData),
         previousDocumentData: previousEventDocumentData,
         operation: operation,
-        startTime: startTime,
+        startTime,
         endTime: now()
       });
     }
   });
   return {
-    bulkInsertDocs: bulkInsertDocs,
-    bulkUpdateDocs: bulkUpdateDocs,
-    errors: errors,
-    changedDocumentIds: changedDocumentIds,
-    eventBulk: eventBulk,
-    attachmentsAdd: attachmentsAdd,
-    attachmentsRemove: attachmentsRemove,
-    attachmentsUpdate: attachmentsUpdate
+    bulkInsertDocs,
+    bulkUpdateDocs,
+    errors,
+    changedDocumentIds,
+    eventBulk,
+    attachmentsAdd,
+    attachmentsRemove,
+    attachmentsUpdate
   };
 }
 export function stripAttachmentsDataFromRow(writeRow) {
@@ -345,9 +343,7 @@ export function attachmentWriteDataToNormalData(writeData) {
 export function stripAttachmentsDataFromDocument(doc) {
   var useDoc = flatClone(doc);
   useDoc._attachments = {};
-  Object.entries(doc._attachments).forEach(function (_ref4) {
-    var attachmentId = _ref4[0],
-      attachmentData = _ref4[1];
+  Object.entries(doc._attachments).forEach(([attachmentId, attachmentData]) => {
     useDoc._attachments[attachmentId] = attachmentWriteDataToNormalData(attachmentData);
   });
   return useDoc;
@@ -372,13 +368,10 @@ export function flatCloneDocWithMeta(doc) {
 export function getUniqueDeterministicEventKey(storageInstance, primaryPath, writeRow) {
   var docId = writeRow.document[primaryPath];
   var binaryValues = [!!writeRow.previous, writeRow.previous && writeRow.previous._deleted, !!writeRow.document._deleted];
-  var binary = binaryValues.map(function (v) {
-    return v ? '1' : '0';
-  }).join('');
+  var binary = binaryValues.map(v => v ? '1' : '0').join('');
   var eventKey = storageInstance.databaseName + '|' + storageInstance.collectionName + '|' + docId + '|' + '|' + binary + '|' + writeRow.document._rev;
   return eventKey;
 }
-
 /**
  * Wraps the normal storageInstance of a RxCollection
  * to ensure that all access is properly using the hooks
@@ -435,7 +428,7 @@ rxJsonSchema) {
        * field of plugin A was not removed.
        */
       if (writeRow.previous) {
-        Object.keys(writeRow.previous._meta).forEach(function (metaFieldName) {
+        Object.keys(writeRow.previous._meta).forEach(metaFieldName => {
           if (!writeRow.document._meta.hasOwnProperty(metaFieldName)) {
             throw newRxError('SNH', {
               dataBefore: writeRow.previous,
@@ -452,25 +445,22 @@ rxJsonSchema) {
      * If you make a plugin that relies on having its own revision
      * stored into the storage, use this.originalStorageInstance.bulkWrite() instead.
      */
-    data._rev = createRevision(database.hashFunction, data, writeRow.previous);
+    data._rev = createRevision(database.token, writeRow.previous);
     return {
       document: data,
       previous: writeRow.previous
     };
   }
   var ret = {
+    originalStorageInstance: storageInstance,
     schema: storageInstance.schema,
     internals: storageInstance.internals,
     collectionName: storageInstance.collectionName,
     databaseName: storageInstance.databaseName,
     options: storageInstance.options,
-    bulkWrite: function bulkWrite(rows, context) {
-      var toStorageWriteRows = rows.map(function (row) {
-        return transformDocumentDataFromRxDBToRxStorage(row);
-      });
-      return database.lockedRun(function () {
-        return storageInstance.bulkWrite(toStorageWriteRows, context);
-      })
+    bulkWrite(rows, context) {
+      var toStorageWriteRows = rows.map(row => transformDocumentDataFromRxDBToRxStorage(row));
+      return database.lockedRun(() => storageInstance.bulkWrite(toStorageWriteRows, context))
       /**
        * The RxStorageInstance MUST NOT allow to insert already _deleted documents,
        * without sending the previous document version.
@@ -478,8 +468,8 @@ rxJsonSchema) {
        * We do this by automatically fixing the conflict errors for that case
        * by running another bulkWrite() and merging the results.
        * @link https://github.com/pubkey/rxdb/pull/3839
-       */.then(function (writeResult) {
-        var reInsertErrors = Object.values(writeResult.error).filter(function (error) {
+       */.then(writeResult => {
+        var reInsertErrors = Object.values(writeResult.error).filter(error => {
           if (error.status === 409 && !error.writeRow.previous && !error.writeRow.document._deleted && ensureNotFalsy(error.documentInDb)._deleted) {
             return true;
           }
@@ -490,18 +480,16 @@ rxJsonSchema) {
             error: flatClone(writeResult.error),
             success: flatClone(writeResult.success)
           };
-          var reInserts = reInsertErrors.map(function (error) {
+          var reInserts = reInsertErrors.map(error => {
             delete useWriteResult.error[error.documentId];
             return {
               previous: error.documentInDb,
               document: Object.assign({}, error.writeRow.document, {
-                _rev: createRevision(database.hashFunction, error.writeRow.document, error.documentInDb)
+                _rev: createRevision(database.token, error.documentInDb)
               })
             };
           });
-          return database.lockedRun(function () {
-            return storageInstance.bulkWrite(reInserts, context);
-          }).then(function (subResult) {
+          return database.lockedRun(() => storageInstance.bulkWrite(reInserts, context)).then(subResult => {
             useWriteResult.error = Object.assign(useWriteResult.error, subResult.error);
             useWriteResult.success = Object.assign(useWriteResult.success, subResult.success);
             return useWriteResult;
@@ -510,53 +498,37 @@ rxJsonSchema) {
         return writeResult;
       });
     },
-    query: function query(preparedQuery) {
-      return database.lockedRun(function () {
-        return storageInstance.query(preparedQuery);
-      });
+    query(preparedQuery) {
+      return database.lockedRun(() => storageInstance.query(preparedQuery));
     },
-    count: function count(preparedQuery) {
-      return database.lockedRun(function () {
-        return storageInstance.count(preparedQuery);
-      });
+    count(preparedQuery) {
+      return database.lockedRun(() => storageInstance.count(preparedQuery));
     },
-    findDocumentsById: function findDocumentsById(ids, deleted) {
-      return database.lockedRun(function () {
-        return storageInstance.findDocumentsById(ids, deleted);
-      });
+    findDocumentsById(ids, deleted) {
+      return database.lockedRun(() => storageInstance.findDocumentsById(ids, deleted));
     },
-    getAttachmentData: function getAttachmentData(documentId, attachmentId) {
-      return database.lockedRun(function () {
-        return storageInstance.getAttachmentData(documentId, attachmentId);
-      });
+    getAttachmentData(documentId, attachmentId) {
+      return database.lockedRun(() => storageInstance.getAttachmentData(documentId, attachmentId));
     },
-    getChangedDocumentsSince: function getChangedDocumentsSince(limit, checkpoint) {
-      return database.lockedRun(function () {
-        return storageInstance.getChangedDocumentsSince(ensureNotFalsy(limit), checkpoint);
-      });
+    getChangedDocumentsSince(limit, checkpoint) {
+      return database.lockedRun(() => storageInstance.getChangedDocumentsSince(ensureNotFalsy(limit), checkpoint));
     },
-    cleanup: function cleanup(minDeletedTime) {
-      return database.lockedRun(function () {
-        return storageInstance.cleanup(minDeletedTime);
-      });
+    cleanup(minDeletedTime) {
+      return database.lockedRun(() => storageInstance.cleanup(minDeletedTime));
     },
-    remove: function remove() {
-      return database.lockedRun(function () {
-        return storageInstance.remove();
-      });
+    remove() {
+      return database.lockedRun(() => storageInstance.remove());
     },
-    close: function close() {
-      return database.lockedRun(function () {
-        return storageInstance.close();
-      });
+    close() {
+      return database.lockedRun(() => storageInstance.close());
     },
-    changeStream: function changeStream() {
+    changeStream() {
       return storageInstance.changeStream();
     },
-    conflictResultionTasks: function conflictResultionTasks() {
+    conflictResultionTasks() {
       return storageInstance.conflictResultionTasks();
     },
-    resolveConflictResultionTask: function resolveConflictResultionTask(taskSolution) {
+    resolveConflictResultionTask(taskSolution) {
       if (taskSolution.output.isEqual) {
         return storageInstance.resolveConflictResultionTask(taskSolution);
       }
@@ -573,12 +545,11 @@ rxJsonSchema) {
         id: taskSolution.id,
         output: {
           isEqual: false,
-          documentData: documentData
+          documentData
         }
       });
     }
   };
-  ret.originalStorageInstance = storageInstance;
   return ret;
 }
 
@@ -591,14 +562,14 @@ export function ensureRxStorageInstanceParamsAreCorrect(params) {
   if (params.schema.keyCompression) {
     throw newRxError('UT5', {
       args: {
-        params: params
+        params
       }
     });
   }
   if (hasEncryption(params.schema)) {
     throw newRxError('UT6', {
       args: {
-        params: params
+        params
       }
     });
   }

@@ -1,6 +1,5 @@
-import { ensureNotFalsy } from 'event-reduce-js';
 import { firstValueFrom, filter, Subject } from 'rxjs';
-import { randomCouchString } from '../../util';
+import { randomCouchString } from '../../plugins/utils';
 export var RxStorageRemote = /*#__PURE__*/function () {
   function RxStorageRemote(settings) {
     this.name = 'remote';
@@ -14,37 +13,29 @@ export var RxStorageRemote = /*#__PURE__*/function () {
     var newId = this.lastRequestId++;
     return this.requestIdSeed + '|' + newId;
   };
-  _proto.createStorageInstance = function createStorageInstance(params) {
-    try {
-      var _this2 = this;
-      var requestId = _this2.getRequestId();
-      var waitForOkPromise = firstValueFrom(_this2.settings.messages$.pipe(filter(function (msg) {
-        return msg.answerTo === requestId;
-      })));
-      _this2.settings.send({
-        connectionId: _this2.getRequestId(),
-        method: 'create',
-        requestId: requestId,
-        params: params
-      });
-      return Promise.resolve(waitForOkPromise).then(function (waitForOkResult) {
-        if (waitForOkResult.error) {
-          throw new Error('could not create instance ' + JSON.stringify(waitForOkResult.error));
-        }
-        return new RxStorageInstanceRemote(_this2, params.databaseName, params.collectionName, params.schema, {
-          params: params,
-          connectionId: ensureNotFalsy(waitForOkResult.connectionId)
-        }, params.options);
-      });
-    } catch (e) {
-      return Promise.reject(e);
+  _proto.createStorageInstance = async function createStorageInstance(params) {
+    var connectionId = 'c|' + this.getRequestId();
+    var requestId = this.getRequestId();
+    var waitForOkPromise = firstValueFrom(this.settings.messages$.pipe(filter(msg => msg.answerTo === requestId)));
+    this.settings.send({
+      connectionId,
+      method: 'create',
+      requestId,
+      params
+    });
+    var waitForOkResult = await waitForOkPromise;
+    if (waitForOkResult.error) {
+      throw new Error('could not create instance ' + JSON.stringify(waitForOkResult.error));
     }
+    return new RxStorageInstanceRemote(this, params.databaseName, params.collectionName, params.schema, {
+      params,
+      connectionId
+    }, params.options);
   };
   return RxStorageRemote;
 }();
 export var RxStorageInstanceRemote = /*#__PURE__*/function () {
   function RxStorageInstanceRemote(storage, databaseName, collectionName, schema, internals, options) {
-    var _this3 = this;
     this.changes$ = new Subject();
     this.conflicts$ = new Subject();
     this.subs = [];
@@ -55,42 +46,32 @@ export var RxStorageInstanceRemote = /*#__PURE__*/function () {
     this.schema = schema;
     this.internals = internals;
     this.options = options;
-    this.messages$ = this.storage.settings.messages$.pipe(filter(function (msg) {
-      return msg.connectionId === _this3.internals.connectionId;
-    }));
-    this.subs.push(this.messages$.subscribe(function (msg) {
+    this.messages$ = this.storage.settings.messages$.pipe(filter(msg => msg.connectionId === this.internals.connectionId));
+    this.subs.push(this.messages$.subscribe(msg => {
       if (msg.method === 'changeStream') {
-        _this3.changes$.next(msg["return"]);
+        this.changes$.next(msg.return);
       }
       if (msg.method === 'conflictResultionTasks') {
-        _this3.conflicts$.next(msg["return"]);
+        this.conflicts$.next(msg.return);
       }
     }));
   }
   var _proto2 = RxStorageInstanceRemote.prototype;
-  _proto2.requestRemote = function requestRemote(methodName, params) {
-    try {
-      var _this5 = this;
-      var requestId = _this5.storage.getRequestId();
-      var responsePromise = firstValueFrom(_this5.messages$.pipe(filter(function (msg) {
-        return msg.answerTo === requestId;
-      })));
-      var message = {
-        connectionId: _this5.internals.connectionId,
-        requestId: requestId,
-        method: methodName,
-        params: params
-      };
-      _this5.storage.settings.send(message);
-      return Promise.resolve(responsePromise).then(function (response) {
-        if (response.error) {
-          throw new Error('could not requestRemote: ' + JSON.stringify(response.error));
-        } else {
-          return response["return"];
-        }
-      });
-    } catch (e) {
-      return Promise.reject(e);
+  _proto2.requestRemote = async function requestRemote(methodName, params) {
+    var requestId = this.storage.getRequestId();
+    var responsePromise = firstValueFrom(this.messages$.pipe(filter(msg => msg.answerTo === requestId)));
+    var message = {
+      connectionId: this.internals.connectionId,
+      requestId,
+      method: methodName,
+      params
+    };
+    this.storage.settings.send(message);
+    var response = await responsePromise;
+    if (response.error) {
+      throw new Error('could not requestRemote: ' + JSON.stringify(response.error));
+    } else {
+      return response.return;
     }
   };
   _proto2.bulkWrite = function bulkWrite(documentWrites, context) {
@@ -117,41 +98,24 @@ export var RxStorageInstanceRemote = /*#__PURE__*/function () {
   _proto2.cleanup = function cleanup(minDeletedTime) {
     return this.requestRemote('cleanup', [minDeletedTime]);
   };
-  _proto2.close = function close() {
-    try {
-      var _this7 = this;
-      if (_this7.closed) {
-        return Promise.reject(new Error('already closed'));
-      }
-      _this7.closed = true;
-      _this7.subs.forEach(function (sub) {
-        return sub.unsubscribe();
-      });
-      _this7.changes$.complete();
-      return Promise.resolve(_this7.requestRemote('close', [])).then(function () {});
-    } catch (e) {
-      return Promise.reject(e);
+  _proto2.close = async function close() {
+    if (this.closed) {
+      return Promise.reject(new Error('already closed'));
     }
+    this.closed = true;
+    this.subs.forEach(sub => sub.unsubscribe());
+    this.changes$.complete();
+    await this.requestRemote('close', []);
   };
-  _proto2.remove = function remove() {
-    try {
-      var _this9 = this;
-      _this9.closed = true;
-      return Promise.resolve(_this9.requestRemote('remove', [])).then(function () {});
-    } catch (e) {
-      return Promise.reject(e);
-    }
+  _proto2.remove = async function remove() {
+    this.closed = true;
+    await this.requestRemote('remove', []);
   };
   _proto2.conflictResultionTasks = function conflictResultionTasks() {
     return this.conflicts$;
   };
-  _proto2.resolveConflictResultionTask = function resolveConflictResultionTask(taskSolution) {
-    try {
-      var _this11 = this;
-      return Promise.resolve(_this11.requestRemote('resolveConflictResultionTask', [taskSolution])).then(function () {});
-    } catch (e) {
-      return Promise.reject(e);
-    }
+  _proto2.resolveConflictResultionTask = async function resolveConflictResultionTask(taskSolution) {
+    await this.requestRemote('resolveConflictResultionTask', [taskSolution]);
   };
   return RxStorageInstanceRemote;
 }();

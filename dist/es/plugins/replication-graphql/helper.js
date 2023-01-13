@@ -1,17 +1,15 @@
-import { ensureNotFalsy } from '../../util';
-export var GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX = 'rxdb-replication-graphql-';
+import { ensureNotFalsy } from '../../plugins/utils';
+export var GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX = 'graphql';
 export function graphQLRequest(httpUrl, clientState, queryParams) {
   var headers = new Headers(clientState.headers || {});
   headers.append('Content-Type', 'application/json');
   var req = new Request(ensureNotFalsy(httpUrl), {
     method: 'POST',
     body: JSON.stringify(queryParams),
-    headers: headers,
+    headers,
     credentials: clientState.credentials
   });
-  return fetch(req).then(function (res) {
-    return res.json();
-  }).then(function (body) {
+  return fetch(req).then(res => res.json()).then(body => {
     return body;
   });
 }

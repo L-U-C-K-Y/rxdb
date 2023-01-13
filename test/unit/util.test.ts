@@ -2,23 +2,24 @@
  * this tests the behaviour of util.js
  */
 import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
+import AsyncTestUtil, { wait } from 'async-test-util';
 import {
     fastUnsecureHash,
     randomCouchString,
     sortObject,
     now,
     blobBufferUtil,
-    createRevision,
     sortDocumentsByLastWriteTime,
     RxDocumentData,
     ensureInteger,
     objectPathMonad,
-    defaultHashFunction,
     b64DecodeUnicode,
     b64EncodeUnicode,
-    batchArray
+    batchArray,
+    clone as rxdbClone
 } from '../../';
+import config from './config';
+
 import {
     validateDatabaseName,
     deepFreezeWhenDevMode
@@ -105,38 +106,6 @@ describe('util.test.js', () => {
         //     });
         // });
     });
-    describe('.createRevision()', () => {
-        it('should return the same values for the same document data', () => {
-            const hash1 = createRevision(
-                defaultHashFunction,
-                {
-                    foo: 'bar',
-                    bar: 'foo',
-                    _deleted: false,
-                    _attachments: {},
-                    _meta: {
-                        lwt: 1
-                    }
-                } as any
-            );
-            const hash2 = createRevision(
-                defaultHashFunction,
-                {
-                    foo: 'bar',
-                    bar: 'foo',
-                    // _rev_tree and _rev must be ignored from hashing
-                    _rev: '1-asdf',
-                    _rev_tree: 'foobar',
-                    _deleted: false,
-                    _attachments: {},
-                    _meta: {
-                        lwt: 1
-                    }
-                }
-            );
-            assert.strictEqual(hash1, hash2);
-        });
-    });
     describe('.sortObject()', () => {
         it('should sort when regex in object', () => {
             const obj = {
@@ -146,6 +115,53 @@ describe('util.test.js', () => {
             };
             const sorted = sortObject(obj);
             assert.ok(sorted.color.$regex instanceof RegExp);
+        });
+    });
+    describe('.recursiveDeepCopy()', () => {
+        /**
+         * Test the performance of different methods.
+         */
+        const cloneMethods: ((o: any) => any)[] = [
+            o => rxdbClone(o),
+            o => structuredClone(o),
+            o => JSON.parse(JSON.stringify(o))
+        ];
+        cloneMethods.forEach(method => {
+            it('run once', async () => {
+                if(!config.isFastMode()){
+                    await wait(200);
+                }
+                let obj = {
+                    a: 'a',
+                    b: 7879,
+                    g: false,
+                    h: [
+                        { g: 0, l: true, k: { l: 56 } },
+                        { g: 0, l: true, fg: 'dfg', k: { l: 56 } },
+                        { g: 0, l: true, k: { l: 56 } }
+                    ],
+                    jk: {
+                        ager: 56,
+                        tank: 'sj',
+                        what: {
+                            sdf: {
+                                sdf: 'asdasd',
+                                ll: ['safd', { sdfs: 'dfsf' }]
+                            }
+                        }
+                    }
+                };
+                const start = performance.now();
+                let t = 0;
+                const runs = config.isFastMode() ? 100 : 2000;
+                while (t < runs) {
+                    t++;
+                    method(obj);
+                    obj = Object.assign({}, obj);
+                }
+                const time = performance.now() - start;
+                console.log('time ' + time);
+            });
         });
     });
     describe('.validateDatabaseName()', () => {

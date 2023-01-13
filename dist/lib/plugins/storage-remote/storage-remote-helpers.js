@@ -5,13 +5,13 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.createAnswer = createAnswer;
 exports.createErrorAnswer = createErrorAnswer;
-var _util = require("../../util");
+var _utils = require("../../plugins/utils");
 function createErrorAnswer(msg, error) {
   return {
     connectionId: msg.connectionId,
     answerTo: msg.requestId,
     method: msg.method,
-    error: (0, _util.errorToPlainJson)(error)
+    error: (0, _utils.errorToPlainJson)(error)
   };
 }
 function createAnswer(msg, ret) {
@@ -19,7 +19,7 @@ function createAnswer(msg, ret) {
     connectionId: msg.connectionId,
     answerTo: msg.requestId,
     method: msg.method,
-    "return": ret
+    return: ret
   };
 }
 //# sourceMappingURL=storage-remote-helpers.js.map

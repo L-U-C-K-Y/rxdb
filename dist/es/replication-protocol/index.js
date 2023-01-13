@@ -6,186 +6,11 @@
 
 import { BehaviorSubject, combineLatest, filter, firstValueFrom, map, Subject } from 'rxjs';
 import { getPrimaryFieldOfPrimaryKey } from '../rx-schema-helper';
-import { ensureNotFalsy, PROMISE_RESOLVE_VOID } from '../util';
+import { ensureNotFalsy, PROMISE_RESOLVE_VOID } from '../plugins/utils';
 import { getCheckpointKey } from './checkpoint';
 import { startReplicationDownstream } from './downstream';
 import { docStateToWriteDoc, writeDocToDocState } from './helper';
 import { startReplicationUpstream } from './upstream';
-function _settle(pact, state, value) {
-  if (!pact.s) {
-    if (value instanceof _Pact) {
-      if (value.s) {
-        if (state & 1) {
-          state = value.s;
-        }
-        value = value.v;
-      } else {
-        value.o = _settle.bind(null, pact, state);
-        return;
-      }
-    }
-    if (value && value.then) {
-      value.then(_settle.bind(null, pact, state), _settle.bind(null, pact, 2));
-      return;
-    }
-    pact.s = state;
-    pact.v = value;
-    const observer = pact.o;
-    if (observer) {
-      observer(pact);
-    }
-  }
-}
-var _Pact = /*#__PURE__*/function () {
-  function _Pact() {}
-  _Pact.prototype.then = function (onFulfilled, onRejected) {
-    var result = new _Pact();
-    var state = this.s;
-    if (state) {
-      var callback = state & 1 ? onFulfilled : onRejected;
-      if (callback) {
-        try {
-          _settle(result, 1, callback(this.v));
-        } catch (e) {
-          _settle(result, 2, e);
-        }
-        return result;
-      } else {
-        return this;
-      }
-    }
-    this.o = function (_this) {
-      try {
-        var value = _this.v;
-        if (_this.s & 1) {
-          _settle(result, 1, onFulfilled ? onFulfilled(value) : value);
-        } else if (onRejected) {
-          _settle(result, 1, onRejected(value));
-        } else {
-          _settle(result, 2, value);
-        }
-      } catch (e) {
-        _settle(result, 2, e);
-      }
-    };
-    return result;
-  };
-  return _Pact;
-}();
-function _isSettledPact(thenable) {
-  return thenable instanceof _Pact && thenable.s & 1;
-}
-function _for(test, update, body) {
-  var stage;
-  for (;;) {
-    var shouldContinue = test();
-    if (_isSettledPact(shouldContinue)) {
-      shouldContinue = shouldContinue.v;
-    }
-    if (!shouldContinue) {
-      return result;
-    }
-    if (shouldContinue.then) {
-      stage = 0;
-      break;
-    }
-    var result = body();
-    if (result && result.then) {
-      if (_isSettledPact(result)) {
-        result = result.s;
-      } else {
-        stage = 1;
-        break;
-      }
-    }
-    if (update) {
-      var updateValue = update();
-      if (updateValue && updateValue.then && !_isSettledPact(updateValue)) {
-        stage = 2;
-        break;
-      }
-    }
-  }
-  var pact = new _Pact();
-  var reject = _settle.bind(null, pact, 2);
-  (stage === 0 ? shouldContinue.then(_resumeAfterTest) : stage === 1 ? result.then(_resumeAfterBody) : updateValue.then(_resumeAfterUpdate)).then(void 0, reject);
-  return pact;
-  function _resumeAfterBody(value) {
-    result = value;
-    do {
-      if (update) {
-        updateValue = update();
-        if (updateValue && updateValue.then && !_isSettledPact(updateValue)) {
-          updateValue.then(_resumeAfterUpdate).then(void 0, reject);
-          return;
-        }
-      }
-      shouldContinue = test();
-      if (!shouldContinue || _isSettledPact(shouldContinue) && !shouldContinue.v) {
-        _settle(pact, 1, result);
-        return;
-      }
-      if (shouldContinue.then) {
-        shouldContinue.then(_resumeAfterTest).then(void 0, reject);
-        return;
-      }
-      result = body();
-      if (_isSettledPact(result)) {
-        result = result.v;
-      }
-    } while (!result || !result.then);
-    result.then(_resumeAfterBody).then(void 0, reject);
-  }
-  function _resumeAfterTest(shouldContinue) {
-    if (shouldContinue) {
-      result = body();
-      if (result && result.then) {
-        result.then(_resumeAfterBody).then(void 0, reject);
-      } else {
-        _resumeAfterBody(result);
-      }
-    } else {
-      _settle(pact, 1, result);
-    }
-  }
-  function _resumeAfterUpdate() {
-    if (shouldContinue = test()) {
-      if (shouldContinue.then) {
-        shouldContinue.then(_resumeAfterTest).then(void 0, reject);
-      } else {
-        _resumeAfterTest(shouldContinue);
-      }
-    } else {
-      _settle(pact, 1, result);
-    }
-  }
-}
-export var awaitRxStorageReplicationIdle = function awaitRxStorageReplicationIdle(state) {
-  try {
-    return Promise.resolve(awaitRxStorageReplicationFirstInSync(state)).then(function () {
-      var _exit = false;
-      return _for(function () {
-        return !_exit;
-      }, void 0, function () {
-        var _state$streamQueue = state.streamQueue,
-          down = _state$streamQueue.down,
-          up = _state$streamQueue.up;
-        return Promise.resolve(Promise.all([up, down])).then(function () {
-          if (down === state.streamQueue.down && up === state.streamQueue.up) {
-            _exit = true;
-          }
-        });
-        /**
-         * If the Promises have not been reasigned
-         * after awaiting them, we know that the replication
-         * is in idle state at this point in time.
-         */
-      });
-    });
-  } catch (e) {
-    return Promise.reject(e);
-  }
-};
 export * from './checkpoint';
 export * from './downstream';
 export * from './upstream';
@@ -196,8 +21,8 @@ export function replicateRxStorageInstance(input) {
   var checkpointKey = getCheckpointKey(input);
   var state = {
     primaryPath: getPrimaryFieldOfPrimaryKey(input.forkInstance.schema.primaryKey),
-    input: input,
-    checkpointKey: checkpointKey,
+    input,
+    checkpointKey,
     downstreamBulkWriteFlag: 'replication-downstream-' + checkpointKey,
     events: {
       canceled: new BehaviorSubject(false),
@@ -245,105 +70,90 @@ export function replicateRxStorageInstance(input) {
   return state;
 }
 export function awaitRxStorageReplicationFirstInSync(state) {
-  return firstValueFrom(combineLatest([state.firstSyncDone.down.pipe(filter(function (v) {
-    return !!v;
-  })), state.firstSyncDone.up.pipe(filter(function (v) {
-    return !!v;
-  }))])).then(function () {});
+  return firstValueFrom(combineLatest([state.firstSyncDone.down.pipe(filter(v => !!v)), state.firstSyncDone.up.pipe(filter(v => !!v))])).then(() => {});
 }
 export function awaitRxStorageReplicationInSync(replicationState) {
   return Promise.all([replicationState.streamQueue.up, replicationState.streamQueue.down, replicationState.checkpointQueue]);
 }
-export function rxStorageInstanceToReplicationHandler(instance, conflictHandler, hashFunction) {
+export async function awaitRxStorageReplicationIdle(state) {
+  await awaitRxStorageReplicationFirstInSync(state);
+  while (true) {
+    var {
+      down,
+      up
+    } = state.streamQueue;
+    await Promise.all([up, down]);
+    /**
+     * If the Promises have not been reasigned
+     * after awaiting them, we know that the replication
+     * is in idle state at this point in time.
+     */
+    if (down === state.streamQueue.down && up === state.streamQueue.up) {
+      return;
+    }
+  }
+}
+export function rxStorageInstanceToReplicationHandler(instance, conflictHandler, databaseInstanceToken) {
   var primaryPath = getPrimaryFieldOfPrimaryKey(instance.schema.primaryKey);
   var replicationHandler = {
-    masterChangeStream$: instance.changeStream().pipe(map(function (eventBulk) {
+    masterChangeStream$: instance.changeStream().pipe(map(eventBulk => {
       var ret = {
         checkpoint: eventBulk.checkpoint,
-        documents: eventBulk.events.map(function (event) {
+        documents: eventBulk.events.map(event => {
           return writeDocToDocState(ensureNotFalsy(event.documentData));
         })
       };
       return ret;
     })),
-    masterChangesSince: function masterChangesSince(checkpoint, batchSize) {
-      return instance.getChangedDocumentsSince(batchSize, checkpoint).then(function (result) {
+    masterChangesSince(checkpoint, batchSize) {
+      return instance.getChangedDocumentsSince(batchSize, checkpoint).then(result => {
         return {
           checkpoint: result.documents.length > 0 ? result.checkpoint : checkpoint,
-          documents: result.documents.map(function (d) {
-            return writeDocToDocState(d);
-          })
+          documents: result.documents.map(d => writeDocToDocState(d))
         };
       });
     },
-    masterWrite: function masterWrite(rows) {
-      try {
-        var rowById = {};
-        rows.forEach(function (row) {
-          var docId = row.newDocumentState[primaryPath];
-          rowById[docId] = row;
-        });
-        var ids = Object.keys(rowById);
-        return Promise.resolve(instance.findDocumentsById(ids, true)).then(function (masterDocsState) {
-          var conflicts = [];
-          var writeRows = [];
-          return Promise.resolve(Promise.all(Object.entries(rowById).map(function (_ref) {
-            try {
-              var id = _ref[0],
-                row = _ref[1];
-              var masterState = masterDocsState[id];
-              var _temp4 = function () {
-                if (!masterState) {
-                  writeRows.push({
-                    document: docStateToWriteDoc(hashFunction, row.newDocumentState)
-                  });
-                } else {
-                  var _temp5 = function () {
-                    if (masterState && !row.assumedMasterState) {
-                      conflicts.push(writeDocToDocState(masterState));
-                    } else return Promise.resolve(conflictHandler({
-                      realMasterState: writeDocToDocState(masterState),
-                      newDocumentState: ensureNotFalsy(row.assumedMasterState)
-                    }, 'rxStorageInstanceToReplicationHandler-masterWrite')).then(function (_conflictHandler) {
-                      if (_conflictHandler.isEqual === true) {
-                        writeRows.push({
-                          previous: masterState,
-                          document: docStateToWriteDoc(hashFunction, row.newDocumentState, masterState)
-                        });
-                      } else {
-                        conflicts.push(writeDocToDocState(masterState));
-                      }
-                    });
-                  }();
-                  if (_temp5 && _temp5.then) return _temp5.then(function () {});
-                }
-              }();
-              return Promise.resolve(_temp4 && _temp4.then ? _temp4.then(function () {}) : void 0);
-            } catch (e) {
-              return Promise.reject(e);
-            }
-          }))).then(function () {
-            var _temp = function () {
-              if (writeRows.length > 0) {
-                return Promise.resolve(instance.bulkWrite(writeRows, 'replication-master-write')).then(function (result) {
-                  Object.values(result.error).forEach(function (err) {
-                    if (err.status !== 409) {
-                      throw new Error('non conflict error');
-                    } else {
-                      conflicts.push(writeDocToDocState(ensureNotFalsy(err.documentInDb)));
-                    }
-                  });
-                });
-              }
-            }();
-            return _temp && _temp.then ? _temp.then(function () {
-              return conflicts;
-            }) : conflicts;
+    async masterWrite(rows) {
+      var rowById = {};
+      rows.forEach(row => {
+        var docId = row.newDocumentState[primaryPath];
+        rowById[docId] = row;
+      });
+      var ids = Object.keys(rowById);
+      var masterDocsState = await instance.findDocumentsById(ids, true);
+      var conflicts = [];
+      var writeRows = [];
+      await Promise.all(Object.entries(rowById).map(async ([id, row]) => {
+        var masterState = masterDocsState[id];
+        if (!masterState) {
+          writeRows.push({
+            document: docStateToWriteDoc(databaseInstanceToken, row.newDocumentState)
           });
+        } else if (masterState && !row.assumedMasterState) {
+          conflicts.push(writeDocToDocState(masterState));
+        } else if ((await conflictHandler({
+          realMasterState: writeDocToDocState(masterState),
+          newDocumentState: ensureNotFalsy(row.assumedMasterState)
+        }, 'rxStorageInstanceToReplicationHandler-masterWrite')).isEqual === true) {
+          writeRows.push({
+            previous: masterState,
+            document: docStateToWriteDoc(databaseInstanceToken, row.newDocumentState, masterState)
+          });
+        } else {
+          conflicts.push(writeDocToDocState(masterState));
+        }
+      }));
+      if (writeRows.length > 0) {
+        var result = await instance.bulkWrite(writeRows, 'replication-master-write');
+        Object.values(result.error).forEach(err => {
+          if (err.status !== 409) {
+            throw new Error('non conflict error');
+          } else {
+            conflicts.push(writeDocToDocState(ensureNotFalsy(err.documentInDb)));
+          }
         });
-      } catch (e) {
-        return Promise.reject(e);
       }
+      return conflicts;
     }
   };
   return replicationHandler;

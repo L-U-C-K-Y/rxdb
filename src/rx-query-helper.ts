@@ -7,10 +7,11 @@ import type {
     RxJsonSchema
 } from './types';
 import {
+    clone,
     firstPropertyNameOfObject,
-    flatClone,
+    toArray,
     isMaybeReadonlyArray
-} from './util';
+} from './plugins/utils';
 
 /**
  * Normalize the query to ensure we have all fields set
@@ -21,7 +22,7 @@ export function normalizeMangoQuery<RxDocType>(
     mangoQuery: MangoQuery<RxDocType>
 ): FilledMangoQuery<RxDocType> {
     const primaryKey: string = getPrimaryFieldOfPrimaryKey(schema.primaryKey);
-    const normalizedMangoQuery: FilledMangoQuery<RxDocType> = flatClone(mangoQuery) as any;
+    const normalizedMangoQuery: FilledMangoQuery<RxDocType> = clone(mangoQuery) as any;
 
     if (typeof normalizedMangoQuery.skip !== 'number') {
         normalizedMangoQuery.skip = 0;
@@ -30,7 +31,7 @@ export function normalizeMangoQuery<RxDocType>(
     if (!normalizedMangoQuery.selector) {
         normalizedMangoQuery.selector = {};
     } else {
-        normalizedMangoQuery.selector = flatClone(normalizedMangoQuery.selector);
+        normalizedMangoQuery.selector = normalizedMangoQuery.selector;
         /**
          * In mango query, it is possible to have an
          * equals comparison by directly assigning a value
@@ -41,12 +42,16 @@ export function normalizeMangoQuery<RxDocType>(
          * }
          * For normalization, we have to normalize this
          * so our checks can perform properly.
+         *
+         *
+         * TODO this must work recursive with nested queries that
+         * contain multiple selectors via $and or $or etc.
          */
         Object
             .entries(normalizedMangoQuery.selector)
             .forEach(([field, matcher]) => {
                 if (typeof matcher !== 'object' || matcher === null) {
-                    normalizedMangoQuery.selector[field] = {
+                    (normalizedMangoQuery as any).selector[field] = {
                         $eq: matcher
                     };
                 }
@@ -58,7 +63,7 @@ export function normalizeMangoQuery<RxDocType>(
      * the primaryKey is inside of it.
      */
     if (normalizedMangoQuery.index) {
-        const indexAr = Array.isArray(normalizedMangoQuery.index) ? normalizedMangoQuery.index.slice(0) : [normalizedMangoQuery.index];
+        const indexAr = toArray(normalizedMangoQuery.index);
         if (!indexAr.includes(primaryKey)) {
             indexAr.push(primaryKey);
         }
@@ -83,7 +88,9 @@ export function normalizeMangoQuery<RxDocType>(
          * which has a bad performance in most cases.
          */
         if (normalizedMangoQuery.index) {
-            normalizedMangoQuery.sort = normalizedMangoQuery.index.map((field: string) => ({ [field as any]: 'asc' } as any));
+            normalizedMangoQuery.sort = normalizedMangoQuery.index.map((field: string) => {
+                return { [field as any]: 'asc' } as any;
+            });
         } else {
             /**
              * Find the index that best matches the fields with the logical operators
@@ -117,7 +124,9 @@ export function normalizeMangoQuery<RxDocType>(
                     }
                 });
                 if (currentBestIndexForSort) {
-                    normalizedMangoQuery.sort = currentBestIndexForSort.map((field: string) => ({ [field as any]: 'asc' } as any));
+                    normalizedMangoQuery.sort = currentBestIndexForSort.map((field: string) => {
+                        return { [field as any]: 'asc' } as any;
+                    });
                 }
 
             }

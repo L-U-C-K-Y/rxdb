@@ -5,9 +5,80 @@
 
 <!-- ADD new changes here! -->
 
+### 14.0.0-beta.18 (11 January 2023)
+
+#
+- Remove the deprecated PouchDB RxStorage.
+- REMOVE old `replication-couchdb` plugin. Rename `replication-couchdb-new` to `replication-couchdb`.
+- Remove depricated `skipIfSame` from `putAttachment()`
+
+#
+- CHANGE use plain json errors inside of RxError parameters to make debugging easier.
+- CHANGE Make RxDocuments immutable
+- ADD `RxDocument.getLatest()`
+- CHANGE `RxCollection.findByIds()` now returns a `RxQuery`.
+- REMOVED `RxCollection.findByIds$`, use `RxCollection.findByIds().$` instead.
+- CHANGE Prefix storage plugins with `storage-` like `rxdb/plugins/storage-dexie`.
+- RENAME `atomicUpdate()` to `incrementalModify()`
+- RENAME `atomicPatch()` to `incrementalPatch()`
+- RENAME `atomicUpsert()` to `incrementalUpsert()`
+- ADD `RxDocument().incrementalUpdate()`
+- ADD `RxDocument.incrementalRemove()`
+- ADD non-incremental `RxDocument` methods `patch()` and `modify()`
+- ADD typings to the query selector
+- CHANGE start replication via pure functions instead of RxCollection methods.
+
+#
+- CHANGE Do not use hash for revisions but use database instance token instead.
+- CHANGE crunch multiple incremental (aka 'atomic') operations into a single database write. Also batch writes to multiple documents into a single write.
+- CHANGE to reduce bundle size and improve performance, the following JavaScript features will no longer be transpiled:
+  - [async/await](https://caniuse.com/async-functions)
+  - [Arrow functions](https://caniuse.com/arrow-functions)
+  - [for...of](https://caniuse.com/?search=for...of)
+  - [shorthand properties](https://caniuse.com/mdn-javascript_operators_object_initializer_shorthand_property_names)
+  - [Spread operator](https://caniuse.com/?search=spread%20operator)
+  - [destructuring](https://caniuse.com/?search=destructuring)
+  - [default parameters](https://caniuse.com/?search=default%20parameters)
+  - [object spread](https://caniuse.com/?search=Object%20spread)
+
+#
+- CHANGE (memory RxStorage) do not clean up database state on closing of the storage, only on `remove()`.
+- FIX CouchDB replication: Use correct default fetch method.
+- FIX schema hashing should respect the sort order [#4005](https://github.com/pubkey/rxdb/pull/4005)
+- FIX replication does not provide a `._rev` to the storage write when a conflict is resolved.
+- FIX(remote storage) ensure caching works properly even on parallel create-calls
+- FIX(replication) Composite Primary Keys broken on replicated collections [#4190](https://github.com/pubkey/rxdb/pull/4190)
+- FIX(sqlite) $in Query not working SQLite [#4278](https://github.com/pubkey/rxdb/issues/4278)
+
+#
+- REMOVE deprecated `babel-plugin-transform-async-to-promises` plugin.
+
 <!-- /CHANGELOG NEWEST -->
 
 <!-- RELEASE BELOW -->
+
+### 13.17.1 (30 December 2022)
+
+- FIX Add missing mingo array operators [#4203](https://github.com/pubkey/rxdb/pull/4203) Thanks [@swnf](https://github.com/swnf)
+- FIX(sqlite) `$elemMatch` query did not work correctly on object arrays.
+- CHANGE(sqlite) do not use `ORDER BY` on count queries for better performance.
+
+### 13.17.0 (29 December 2022)
+
+- FIX(lokijs) wrong query result when sorting on a nested field.
+- IMPROVE usage of the [mingo query library](https://github.com/kofrasa/mingo) by only adding the operators to the build that are really needed.
+- CHANGE use faster deep clone method.
+
+### 13.16.1 (27 December 2022)
+
+### 13.16.0 (26 December 2022)
+
+- ADD [Vite Vanilla Typescript Example](https://github.com/pubkey/rxdb/tree/master/examples/vite-vanilla-ts) Thanks [@SebasG22](https://github.com/SebasG22)
+- ADD [Use exports field in package.json](https://github.com/pubkey/rxdb/pull/4196) Thanks [@SebasG22](https://github.com/SebasG22) and [@swnf](https://github.com/swnf)
+
+### 13.15.3 (13 December 2022)
+
+- ADD `$regex` support to the [SQLite RxStorage](https://rxdb.info/rx-storage-sqlite.html)
 
 ### 13.15.2 (11 December 2022)
 

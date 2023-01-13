@@ -1,30 +1,23 @@
 export function setFlutterRxDatabaseConnector(createDB) {
-  process.init = function (databaseName) {
-    try {
-      return Promise.resolve(createDB(databaseName)).then(function (db) {
-        db.eventBulks$.subscribe(function (eventBulk) {
-          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-          // @ts-ignore
-          sendRxDBEvent(JSON.stringify(eventBulk));
-        });
-        process.db = db;
-        var collections = [];
-        Object.entries(db.collections).forEach(function (_ref) {
-          var collectionName = _ref[0],
-            collection = _ref[1];
-          collections.push({
-            name: collectionName,
-            primaryKey: collection.schema.primaryPath
-          });
-        });
-        return {
-          databaseName: databaseName,
-          collections: collections
-        };
+  process.init = async databaseName => {
+    var db = await createDB(databaseName);
+    db.eventBulks$.subscribe(eventBulk => {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      sendRxDBEvent(JSON.stringify(eventBulk));
+    });
+    process.db = db;
+    var collections = [];
+    Object.entries(db.collections).forEach(([collectionName, collection]) => {
+      collections.push({
+        name: collectionName,
+        primaryKey: collection.schema.primaryPath
       });
-    } catch (e) {
-      return Promise.reject(e);
-    }
+    });
+    return {
+      databaseName,
+      collections
+    };
   };
 }
 
@@ -34,36 +27,26 @@ export function setFlutterRxDatabaseConnector(createDB) {
  */
 export function getLokijsAdapterFlutter() {
   var ret = {
-    loadDatabase: function loadDatabase(databaseName, callback) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        return Promise.resolve(readKeyValue(databaseName)).then(function (serializedDb) {
-          var success = true;
-          if (success) {
-            callback(serializedDb);
-          } else {
-            callback(new Error('There was a problem loading the database'));
-          }
-        });
-      } catch (e) {
-        return Promise.reject(e);
+    async loadDatabase(databaseName, callback) {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      var serializedDb = await readKeyValue(databaseName);
+      var success = true;
+      if (success) {
+        callback(serializedDb);
+      } else {
+        callback(new Error('There was a problem loading the database'));
       }
     },
-    saveDatabase: function saveDatabase(databaseName, dbstring, callback) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        return Promise.resolve(persistKeyValue(databaseName, dbstring)).then(function () {
-          var success = true; // make your own determinations
-          if (success) {
-            callback(null);
-          } else {
-            callback(new Error('An error was encountered loading " + dbname + " database.'));
-          }
-        });
-      } catch (e) {
-        return Promise.reject(e);
+    async saveDatabase(databaseName, dbstring, callback) {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      await persistKeyValue(databaseName, dbstring);
+      var success = true; // make your own determinations
+      if (success) {
+        callback(null);
+      } else {
+        callback(new Error('An error was encountered loading " + dbname + " database.'));
       }
     }
   };

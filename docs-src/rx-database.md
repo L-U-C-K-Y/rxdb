@@ -8,7 +8,7 @@ The database is created by the asynchronous `.createRxDatabase()` function of th
 
 ```javascript
 import { createRxDatabase } from 'rxdb';
-import { getRxStorageDexie } from 'rxdb/plugins/dexie';
+import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 
 const db = await createRxDatabase({
   name: 'heroesdb',                   // <- name
@@ -38,7 +38,7 @@ For example you can use the [Dexie RxStorage](./rx-storage-dexie.md) in the brow
 ```javascript
 
 // use the Dexie.js RxStorage that stores data in IndexedDB.
-import { getRxStorageDexie } from 'rxdb/plugins/dexie';
+import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 
 const dbDexie = await createRxDatabase({
   name: 'mydatabase',
@@ -47,7 +47,7 @@ const dbDexie = await createRxDatabase({
 
 
 // ...or use the LokiJS RxStorage with the indexeddb adapter.
-import { getRxStorageLoki } from 'rxdb/plugins/lokijs';
+import { getRxStorageLoki } from 'rxdb/plugins/storage-lokijs';
 const LokiIncrementalIndexedDBAdapter = require('lokijs/src/incremental-indexeddb-adapter');
 
 const dbLoki = await createRxDatabase({
@@ -177,19 +177,6 @@ await myDatabase.remove();
 // NOTICE: You can also remove a database without its instance
 import { removeRxDatabase } from 'rxdb';
 removeRxDatabase('mydatabasename', 'localstorage');
-```
-
-### checkAdapter()
-Checks if the given PouchDB adapter can be used with RxDB in the current environment.
-
-```javascript
-// must be imported from the pouchdb plugin
-import { 
-    checkAdapter
-} from 'rxdb/plugins/pouchdb';
-
-const ok = await checkAdapter('idb');
-console.dir(ok); // true on most browsers, false on nodejs
 ```
 
 ### isRxDatabase

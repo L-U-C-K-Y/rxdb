@@ -3,8 +3,7 @@ import _inheritsLoose from "@babel/runtime/helpers/inheritsLoose";
  * this plugin adds the RxCollection.syncGraphQl()-function to rxdb
  * you can use it to sync collections with a remote graphql endpoint.
  */
-import objectPath from 'object-path';
-import { ensureNotFalsy, fastUnsecureHash } from '../../util';
+import { ensureNotFalsy, fastUnsecureHash, getProperty } from '../../plugins/utils';
 import { graphQLRequest as _graphQLRequest, GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX } from './helper';
 import { RxDBLeaderElectionPlugin } from '../leader-election';
 import { RxReplicationState, startReplicationOnLeaderShip } from '../replication';
@@ -40,68 +39,51 @@ export var RxGraphQLReplicationState = /*#__PURE__*/function (_RxReplicationStat
   };
   return RxGraphQLReplicationState;
 }(RxReplicationState);
-export function syncGraphQL(_ref) {
-  var url = _ref.url,
-    _ref$headers = _ref.headers,
-    headers = _ref$headers === void 0 ? {} : _ref$headers,
-    credentials = _ref.credentials,
-    _ref$deletedField = _ref.deletedField,
-    deletedField = _ref$deletedField === void 0 ? '_deleted' : _ref$deletedField,
-    _ref$waitForLeadershi = _ref.waitForLeadership,
-    waitForLeadership = _ref$waitForLeadershi === void 0 ? true : _ref$waitForLeadershi,
-    pull = _ref.pull,
-    push = _ref.push,
-    _ref$live = _ref.live,
-    live = _ref$live === void 0 ? true : _ref$live,
-    _ref$retryTime = _ref.retryTime,
-    retryTime = _ref$retryTime === void 0 ? 1000 * 5 : _ref$retryTime,
-    _ref$autoStart = _ref.autoStart,
-    autoStart = _ref$autoStart === void 0 ? true : _ref$autoStart;
-  var collection = this;
-
+export function replicateGraphQL({
+  collection,
+  url,
+  headers = {},
+  credentials,
+  deletedField = '_deleted',
+  waitForLeadership = true,
+  pull,
+  push,
+  live = true,
+  retryTime = 1000 * 5,
+  // in ms
+  autoStart = true
+}) {
+  addRxPlugin(RxDBLeaderElectionPlugin);
   /**
    * We use this object to store the GraphQL client
    * so we can later swap out the client inside of the replication handlers.
    */
   var mutateableClientState = {
-    headers: headers,
-    credentials: credentials
+    headers,
+    credentials
   };
   var pullStream$ = new Subject();
   var replicationPrimitivesPull;
   if (pull) {
     var pullBatchSize = pull.batchSize ? pull.batchSize : 20;
     replicationPrimitivesPull = {
-      handler: function handler(lastPulledCheckpoint) {
-        try {
-          return Promise.resolve(pull.queryBuilder(lastPulledCheckpoint, pullBatchSize)).then(function (pullGraphQL) {
-            return Promise.resolve(graphqlReplicationState.graphQLRequest(pullGraphQL)).then(function (result) {
-              function _temp2() {
-                var docsData = data.documents;
-                var newCheckpoint = data.checkpoint;
-                return {
-                  documents: docsData,
-                  checkpoint: newCheckpoint
-                };
-              }
-              if (result.errors) {
-                throw result.errors;
-              }
-              var dataPath = pull.dataPath || ['data', Object.keys(result.data)[0]];
-              var data = objectPath.get(result, dataPath);
-              var _temp = function () {
-                if (pull.responseModifier) {
-                  return Promise.resolve(pull.responseModifier(data, 'handler', lastPulledCheckpoint)).then(function (_pull$responseModifie) {
-                    data = _pull$responseModifie;
-                  });
-                }
-              }();
-              return _temp && _temp.then ? _temp.then(_temp2) : _temp2(_temp);
-            });
-          });
-        } catch (e) {
-          return Promise.reject(e);
+      async handler(lastPulledCheckpoint) {
+        var pullGraphQL = await pull.queryBuilder(lastPulledCheckpoint, pullBatchSize);
+        var result = await graphqlReplicationState.graphQLRequest(pullGraphQL);
+        if (result.errors) {
+          throw result.errors;
         }
+        var dataPath = pull.dataPath || ['data', Object.keys(result.data)[0]];
+        var data = getProperty(result, dataPath);
+        if (pull.responseModifier) {
+          data = await pull.responseModifier(data, 'handler', lastPulledCheckpoint);
+        }
+        var docsData = data.documents;
+        var newCheckpoint = data.checkpoint;
+        return {
+          documents: docsData,
+          checkpoint: newCheckpoint
+        };
       },
       batchSize: pull.batchSize,
       modifier: pull.modifier,
@@ -111,21 +93,15 @@ export function syncGraphQL(_ref) {
   var replicationPrimitivesPush;
   if (push) {
     replicationPrimitivesPush = {
-      handler: function handler(rows) {
-        try {
-          return Promise.resolve(push.queryBuilder(rows)).then(function (pushObj) {
-            return Promise.resolve(graphqlReplicationState.graphQLRequest(pushObj)).then(function (result) {
-              if (result.errors) {
-                throw result.errors;
-              }
-              var dataPath = Object.keys(result.data)[0];
-              var data = objectPath.get(result.data, dataPath);
-              return data;
-            });
-          });
-        } catch (e) {
-          return Promise.reject(e);
+      async handler(rows) {
+        var pushObj = await push.queryBuilder(rows);
+        var result = await graphqlReplicationState.graphQLRequest(pushObj);
+        if (result.errors) {
+          throw result.errors;
         }
+        var dataPath = Object.keys(result.data)[0];
+        var data = getProperty(result.data, dataPath);
+        return data;
       },
       batchSize: push.batchSize,
       modifier: push.modifier
@@ -134,37 +110,26 @@ export function syncGraphQL(_ref) {
   var graphqlReplicationState = new RxGraphQLReplicationState(url, mutateableClientState, GRAPHQL_REPLICATION_PLUGIN_IDENTITY_PREFIX + fastUnsecureHash(url.http ? url.http : url.ws), collection, deletedField, replicationPrimitivesPull, replicationPrimitivesPush, live, retryTime, autoStart);
   var mustUseSocket = url.ws && pull && pull.streamQueryBuilder && live;
   var startBefore = graphqlReplicationState.start.bind(graphqlReplicationState);
-  graphqlReplicationState.start = function () {
+  graphqlReplicationState.start = () => {
     if (mustUseSocket) {
       var wsClient = getGraphQLWebSocket(ensureNotFalsy(url.ws));
-      wsClient.on('connected', function () {
+      wsClient.on('connected', () => {
         pullStream$.next('RESYNC');
       });
       var query = ensureNotFalsy(pull.streamQueryBuilder)(mutateableClientState.headers);
       wsClient.subscribe(query, {
-        next: function (streamResponse) {
-          try {
-            var _temp5 = function _temp5() {
-              pullStream$.next(_data);
-            };
-            var firstField = Object.keys(streamResponse.data)[0];
-            var _data = streamResponse.data[firstField];
-            var _temp6 = function () {
-              if (pull.responseModifier) {
-                return Promise.resolve(pull.responseModifier(_data, 'stream')).then(function (_pull$responseModifie2) {
-                  _data = _pull$responseModifie2;
-                });
-              }
-            }();
-            return Promise.resolve(_temp6 && _temp6.then ? _temp6.then(_temp5) : _temp5(_temp6));
-          } catch (e) {
-            return Promise.reject(e);
+        next: async streamResponse => {
+          var firstField = Object.keys(streamResponse.data)[0];
+          var data = streamResponse.data[firstField];
+          if (pull.responseModifier) {
+            data = await pull.responseModifier(data, 'stream');
           }
+          pullStream$.next(data);
         },
-        error: function error(_error) {
-          pullStream$.error(_error);
+        error: error => {
+          pullStream$.error(error);
         },
-        complete: function complete() {
+        complete: () => {
           pullStream$.complete();
         }
       });
@@ -172,7 +137,7 @@ export function syncGraphQL(_ref) {
     return startBefore();
   };
   var cancelBefore = graphqlReplicationState.cancel.bind(graphqlReplicationState);
-  graphqlReplicationState.cancel = function () {
+  graphqlReplicationState.cancel = () => {
     pullStream$.complete();
     if (mustUseSocket) {
       removeGraphQLWebSocketRef(ensureNotFalsy(url.ws));
@@ -186,16 +151,4 @@ export * from './helper';
 export * from './graphql-schema-from-rx-schema';
 export * from './query-builder-from-rx-schema';
 export * from './graphql-websocket';
-export var RxDBReplicationGraphQLPlugin = {
-  name: 'replication-graphql',
-  init: function init() {
-    addRxPlugin(RxDBLeaderElectionPlugin);
-  },
-  rxdb: true,
-  prototypes: {
-    RxCollection: function RxCollection(proto) {
-      proto.syncGraphQL = syncGraphQL;
-    }
-  }
-};
 //# sourceMappingURL=index.js.map

@@ -9,7 +9,7 @@ exports.getStartIndexStringFromLowerBound = getStartIndexStringFromLowerBound;
 exports.getStartIndexStringFromUpperBound = getStartIndexStringFromUpperBound;
 exports.getStringLengthOfIndexNumber = getStringLengthOfIndexNumber;
 var _rxSchemaHelper = require("./rx-schema-helper");
-var _util = require("./util");
+var _utils = require("./plugins/utils");
 var _queryPlanner = require("./query-planner");
 /**
  * For some RxStorage implementations,
@@ -35,24 +35,27 @@ function getIndexableStringMonad(schema, index) {
    * to save performance when the returned
    * function is called many times.
    */
-  var fieldNameProperties = index.map(function (fieldName) {
+  var fieldNameProperties = index.map(fieldName => {
     var schemaPart = (0, _rxSchemaHelper.getSchemaByObjectPath)(schema, fieldName);
+    if (!schemaPart) {
+      throw new Error('not in schema: ' + fieldName);
+    }
     var type = schemaPart.type;
     var parsedLengths;
     if (type === 'number' || type === 'integer') {
       parsedLengths = getStringLengthOfIndexNumber(schemaPart);
     }
     return {
-      fieldName: fieldName,
-      schemaPart: schemaPart,
-      parsedLengths: parsedLengths,
+      fieldName,
+      schemaPart,
+      parsedLengths,
       hasComplexPath: fieldName.includes('.'),
-      getValueFn: (0, _util.objectPathMonad)(fieldName)
+      getValueFn: (0, _utils.objectPathMonad)(fieldName)
     };
   });
-  var ret = function ret(docData) {
+  var ret = function (docData) {
     var str = '';
-    fieldNameProperties.forEach(function (props) {
+    fieldNameProperties.forEach(props => {
       var schemaPart = props.schemaPart;
       var type = schemaPart.type;
       var fieldValue = props.getValueFn(docData);
@@ -65,7 +68,7 @@ function getIndexableStringMonad(schema, index) {
         var boolToStr = fieldValue ? '1' : '0';
         str += boolToStr;
       } else {
-        var parsedLengths = (0, _util.ensureNotFalsy)(props.parsedLengths);
+        var parsedLengths = (0, _utils.ensureNotFalsy)(props.parsedLengths);
         if (!fieldValue) {
           fieldValue = 0;
         }
@@ -88,8 +91,8 @@ function getStringLengthOfIndexNumber(schemaPart) {
     decimals = multipleOfParts[1].length;
   }
   return {
-    nonDecimals: nonDecimals,
-    decimals: decimals,
+    nonDecimals,
+    decimals,
     roundedMinimum: minimum
   };
 }
@@ -104,13 +107,13 @@ function getNumberIndexString(parsedLengths, fieldValue) {
 }
 function getStartIndexStringFromLowerBound(schema, index, lowerBound, inclusiveStart) {
   var str = '';
-  index.forEach(function (fieldName, idx) {
+  index.forEach((fieldName, idx) => {
     var schemaPart = (0, _rxSchemaHelper.getSchemaByObjectPath)(schema, fieldName);
     var bound = lowerBound[idx];
     var type = schemaPart.type;
     switch (type) {
       case 'string':
-        var maxLength = (0, _util.ensureNotFalsy)(schemaPart.maxLength);
+        var maxLength = (0, _utils.ensureNotFalsy)(schemaPart.maxLength);
         if (typeof bound === 'string') {
           str += bound.padEnd(maxLength, ' ');
         } else {
@@ -144,13 +147,13 @@ function getStartIndexStringFromLowerBound(schema, index, lowerBound, inclusiveS
 }
 function getStartIndexStringFromUpperBound(schema, index, upperBound, inclusiveEnd) {
   var str = '';
-  index.forEach(function (fieldName, idx) {
+  index.forEach((fieldName, idx) => {
     var schemaPart = (0, _rxSchemaHelper.getSchemaByObjectPath)(schema, fieldName);
     var bound = upperBound[idx];
     var type = schemaPart.type;
     switch (type) {
       case 'string':
-        var maxLength = (0, _util.ensureNotFalsy)(schemaPart.maxLength);
+        var maxLength = (0, _utils.ensureNotFalsy)(schemaPart.maxLength);
         if (typeof bound === 'string') {
           str += bound.padEnd(maxLength, inclusiveEnd ? _queryPlanner.INDEX_MAX : ' ');
         } else {

@@ -1,6 +1,4 @@
 import { newRxError } from '../../rx-error';
-import deepEqual from 'fast-deep-equal';
-import objectPath from 'object-path';
 import type {
     CRDTDocumentField,
     CRDTEntry,
@@ -18,10 +16,14 @@ import type {
 } from '../../types';
 import {
     clone,
+    deepEqual,
     ensureNotFalsy,
+    getProperty,
     now,
-    objectPathMonad
-} from '../../util';
+    objectPathMonad,
+    setProperty,
+    toArray
+} from '../../plugins/utils';
 import modifyjs from 'modifyjs';
 import {
     overwritable,
@@ -48,10 +50,10 @@ export async function updateCRDT<RxDocType>(
     const crdtOptions = ensureNotFalsy(jsonSchema.crdt);
     const storageToken = await this.collection.database.storageToken;
 
-    return this.atomicUpdate((docData, rxDoc) => {
-        const crdtDocField: CRDTDocumentField<RxDocType> = clone(objectPath.get(docData as any, crdtOptions.field));
+    return this.incrementalModify((docData) => {
+        const crdtDocField: CRDTDocumentField<RxDocType> = clone(getProperty(docData as any, crdtOptions.field));
         const operation: CRDTOperation<RxDocType> = {
-            body: Array.isArray(entry) ? entry : [entry],
+            body: toArray(entry),
             creator: storageToken,
             time: now()
         };
@@ -64,24 +66,14 @@ export async function updateCRDT<RxDocType>(
         crdtDocField.operations.push(lastAr);
         crdtDocField.hash = hashCRDTOperations(this.collection.database.hashFunction, crdtDocField);
 
-        let newDocData: WithDeleted<RxDocType> = clone(rxDoc.toJSON()) as any;
-        newDocData._deleted = rxDoc._data._deleted;
-        newDocData = runOperationOnDocument(
+        docData = runOperationOnDocument(
             this.collection.database.storage.statics,
             this.collection.schema.jsonSchema,
-            newDocData,
+            docData,
             operation
         );
-        objectPath.set(newDocData, crdtOptions.field, crdtDocField);
-
-        // add other internal fields
-        const fullDocData: RxDocumentData<RxDocType> = Object.assign({
-            _attachments: rxDoc._data._attachments,
-            _meta: rxDoc._data._meta,
-            _rev: rxDoc._data._rev
-        }, newDocData);
-
-        return fullDocData;
+        setProperty(docData, crdtOptions.field, crdtDocField);
+        return docData;
     }, RX_CRDT_CONTEXT);
 }
 
@@ -118,14 +110,14 @@ export async function insertCRDT<RxDocType>(
         operations: [],
         hash: ''
     };
-    objectPath.set(insertData as any, crdtOptions.field, crdtDocField);
+    setProperty(insertData as any, crdtOptions.field, crdtDocField);
 
     const lastAr: CRDTOperation<RxDocType>[] = [operation];
     crdtDocField.operations.push(lastAr);
     crdtDocField.hash = hashCRDTOperations(this.database.hashFunction, crdtDocField);
 
     const result = await this.insert(insertData).catch(async (err: RxError) => {
-        if (err.code === 'COL19') {
+        if (err.code === 'CONFLICT') {
             // was a conflict, update document instead of inserting
             const doc = await this.findOne(err.parameters.id).exec(true);
             return doc.updateCRDT(entry);
@@ -297,7 +289,7 @@ export function rebuildFromCRDT<RxDocType>(
     let base: WithDeleted<RxDocType> = {
         _deleted: false
     } as any;
-    objectPath.set(base, ensureNotFalsy(schema.crdt).field, crdts);
+    setProperty(base, ensureNotFalsy(schema.crdt).field, crdts);
     crdts.operations.forEach(operations => {
         operations.forEach(op => {
             base = runOperationOnDocument(
@@ -374,10 +366,10 @@ export const RxDBcrdtPlugin: RxPlugin = {
                 });
             };
 
-            const oldAtomicPatch = proto.atomicPatch;
-            proto.atomicPatch = function (this: RxDocument, patch: any) {
+            const oldincrementalPatch = proto.incrementalPatch;
+            proto.incrementalPatch = function (this: RxDocument, patch: any) {
                 if (!this.collection.schema.jsonSchema.crdt) {
-                    return oldAtomicPatch.bind(this)(patch);
+                    return oldincrementalPatch.bind(this)(patch);
                 }
                 return this.updateCRDT({
                     ifMatch: {
@@ -385,13 +377,13 @@ export const RxDBcrdtPlugin: RxPlugin = {
                     }
                 });
             };
-            const oldAtomicUpdate = proto.atomicUpdate;
-            proto.atomicUpdate = function (fn: any, context: string) {
+            const oldincrementalModify = proto.incrementalModify;
+            proto.incrementalModify = function (fn: any, context: string) {
                 if (!this.collection.schema.jsonSchema.crdt) {
-                    return oldAtomicUpdate.bind(this)(fn);
+                    return oldincrementalModify.bind(this)(fn);
                 }
                 if (context === RX_CRDT_CONTEXT) {
-                    return oldAtomicUpdate.bind(this)(fn);
+                    return oldincrementalModify.bind(this)(fn);
                 } else {
                     throw newRxError('CRDT2', {
                         id: this.primary,
@@ -511,7 +503,7 @@ export const RxDBcrdtPlugin: RxPlugin = {
                             hash: ''
                         };
                         crdtOperations.hash = hashCRDTOperations(collection.database.hashFunction, crdtOperations);
-                        objectPath.set(docData, crdtOptions.field, crdtOperations);
+                        setProperty(docData, crdtOptions.field, crdtOperations);
                         return docData;
                     });
                     return bulkInsertBefore(useDocsData);

@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.getConnectionHandlerSimplePeer = getConnectionHandlerSimplePeer;
 var _rxjs = require("rxjs");
-var _util = require("../../util");
+var _utils = require("../../plugins/utils");
 var _simplePeer = _interopRequireDefault(require("simple-peer"));
 var _rxError = require("../../rx-error");
 /**
@@ -14,12 +14,12 @@ var _rxError = require("../../rx-error");
  */
 function getConnectionHandlerSimplePeer(serverUrl, wrtc) {
   var io = require('socket.io-client');
-  var creator = function creator(options) {
+  var creator = options => {
     var socket = io(serverUrl);
-    var peerId = (0, _util.randomCouchString)(10);
+    var peerId = (0, _utils.randomCouchString)(10);
     socket.emit('join', {
       room: options.topic,
-      peerId: peerId
+      peerId
     });
     var connect$ = new _rxjs.Subject();
     var disconnect$ = new _rxjs.Subject();
@@ -27,19 +27,19 @@ function getConnectionHandlerSimplePeer(serverUrl, wrtc) {
     var response$ = new _rxjs.Subject();
     var error$ = new _rxjs.Subject();
     var peers = new Map();
-    socket.on('joined', function (roomPeerIds) {
-      roomPeerIds.forEach(function (remotePeerId) {
+    socket.on('joined', roomPeerIds => {
+      roomPeerIds.forEach(remotePeerId => {
         if (remotePeerId === peerId || peers.has(remotePeerId)) {
           return;
         }
         // console.log('other user joined room ' + remotePeerId);
-        var newPeer = new _simplePeer["default"]({
+        var newPeer = new _simplePeer.default({
           initiator: remotePeerId > peerId,
-          wrtc: wrtc,
+          wrtc,
           trickle: true
         });
         peers.set(remotePeerId, newPeer);
-        newPeer.on('data', function (messageOrResponse) {
+        newPeer.on('data', messageOrResponse => {
           messageOrResponse = JSON.parse(messageOrResponse.toString());
           // console.log('got a message from peer3: ' + messageOrResponse)
           if (messageOrResponse.result) {
@@ -54,51 +54,47 @@ function getConnectionHandlerSimplePeer(serverUrl, wrtc) {
             });
           }
         });
-        newPeer.on('signal', function (signal) {
+        newPeer.on('signal', signal => {
           // console.log('emit signal from ' + peerId + ' to ' + remotePeerId);
           socket.emit('signal', {
             from: peerId,
             to: remotePeerId,
             room: options.topic,
-            signal: signal
+            signal
           });
         });
-        newPeer.on('error', function (error) {
+        newPeer.on('error', error => {
           error$.next((0, _rxError.newRxError)('RC_P2P_PEER', {
-            error: error
+            error
           }));
         });
-        newPeer.on('connect', function () {
+        newPeer.on('connect', () => {
           connect$.next(newPeer);
         });
       });
     });
-    socket.on('signal', function (data) {
+    socket.on('signal', data => {
       // console.log('got signal(' + peerId + ') ' + data.from + ' -> ' + data.to);
-      var peer = (0, _util.getFromMapOrThrow)(peers, data.from);
+      var peer = (0, _utils.getFromMapOrThrow)(peers, data.from);
       peer.signal(data.signal);
     });
     var handler = {
-      error$: error$,
-      connect$: connect$,
-      disconnect$: disconnect$,
-      message$: message$,
-      response$: response$,
-      send: function send(peer, message) {
-        try {
-          return Promise.resolve(peer.send(JSON.stringify(message))).then(function () {});
-        } catch (e) {
-          return Promise.reject(e);
-        }
+      error$,
+      connect$,
+      disconnect$,
+      message$,
+      response$,
+      async send(peer, message) {
+        await peer.send(JSON.stringify(message));
       },
-      destroy: function destroy() {
+      destroy() {
         socket.close();
         error$.complete();
         connect$.complete();
         disconnect$.complete();
         message$.complete();
         response$.complete();
-        return _util.PROMISE_RESOLVE_VOID;
+        return _utils.PROMISE_RESOLVE_VOID;
       }
     };
     return handler;

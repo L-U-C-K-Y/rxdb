@@ -4,7 +4,7 @@ The [RxStorage](./rx-storage.md) Localstorage Meta Optimizer is a wrapper around
 
 Depending on your database usage and the collection amount, this can save about 200 milliseconds on the initial pageload. It is recommended to use this when you create more then 4 RxCollections.
 
-**NOTICE:** This plugin is part of [RxDB premium](./premium.md). It is not part of the default RxDB module.
+**NOTICE:** This plugin is part of [RxDB premium](https://rxdb.info/premium.html). It is not part of the default RxDB module.
 
 ## Usage
 
@@ -15,7 +15,7 @@ import {
     getLocalstorageMetaOptimizerRxStorage
 } from 'rxdb-premium/plugins/localstorage-meta-optimizer';
 
-import { getRxStorageDexie } from 'rxdb/plugins/dexie';
+import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 
 
 /**

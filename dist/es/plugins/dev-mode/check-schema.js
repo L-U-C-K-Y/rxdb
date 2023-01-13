@@ -2,11 +2,9 @@
  * does additional checks over the schema-json
  * to ensure nothing is broken or not supported
  */
-
-import objectPath from 'object-path';
 import { newRxError } from '../../rx-error';
 import { getPrimaryFieldOfPrimaryKey, getSchemaByObjectPath } from '../../rx-schema-helper';
-import { flattenObject, isMaybeReadonlyArray, trimDots } from '../../util';
+import { flattenObject, getProperty, isMaybeReadonlyArray, trimDots } from '../../plugins/utils';
 import { rxDocumentProperties } from './entity-properties';
 
 /**
@@ -21,7 +19,7 @@ export function checkFieldNameRegex(fieldName) {
   }
   if (['properties', 'language'].includes(fieldName)) {
     throw newRxError('SC23', {
-      fieldName: fieldName
+      fieldName
     });
   }
   var regexStr = '^[a-zA-Z](?:[[a-zA-Z0-9_]*]?[a-zA-Z0-9])?$';
@@ -35,7 +33,7 @@ export function checkFieldNameRegex(fieldName) {
   fieldName !== '_id' && !fieldName.match(regex)) {
     throw newRxError('SC1', {
       regex: regexStr,
-      fieldName: fieldName
+      fieldName
     });
   }
 }
@@ -51,7 +49,7 @@ export function validateFieldsDeep(rxJsonSchema) {
     // 'item' only allowed it type=='array'
     if (schemaObj.hasOwnProperty('item') && schemaObj.type !== 'array') {
       throw newRxError('SC2', {
-        fieldName: fieldName
+        fieldName
       });
     }
 
@@ -61,7 +59,7 @@ export function validateFieldsDeep(rxJsonSchema) {
      */
     if (schemaObj.hasOwnProperty('required') && typeof schemaObj.required === 'boolean') {
       throw newRxError('SC24', {
-        fieldName: fieldName
+        fieldName
       });
     }
 
@@ -70,7 +68,7 @@ export function validateFieldsDeep(rxJsonSchema) {
       if (Array.isArray(schemaObj.type)) {
         if (schemaObj.type.length > 2 || !schemaObj.type.includes('string') || !schemaObj.type.includes('null')) {
           throw newRxError('SC4', {
-            fieldName: fieldName
+            fieldName
           });
         }
       } else {
@@ -80,13 +78,13 @@ export function validateFieldsDeep(rxJsonSchema) {
           case 'array':
             if (!schemaObj.items || !schemaObj.items.type || schemaObj.items.type !== 'string') {
               throw newRxError('SC3', {
-                fieldName: fieldName
+                fieldName
               });
             }
             break;
           default:
             throw newRxError('SC4', {
-              fieldName: fieldName
+              fieldName
             });
         }
       }
@@ -97,13 +95,13 @@ export function validateFieldsDeep(rxJsonSchema) {
     if (isNested) {
       if (schemaObj.primary) {
         throw newRxError('SC6', {
-          path: path,
+          path,
           primary: schemaObj.primary
         });
       }
-      if (schemaObj["default"]) {
+      if (schemaObj.default) {
         throw newRxError('SC7', {
-          path: path
+          path
         });
       }
     }
@@ -113,7 +111,7 @@ export function validateFieldsDeep(rxJsonSchema) {
       // if _id is used, it must be primaryKey
       if (fieldName === '_id' && primaryPath !== '_id') {
         throw newRxError('COL2', {
-          fieldName: fieldName
+          fieldName
         });
       }
 
@@ -125,14 +123,14 @@ export function validateFieldsDeep(rxJsonSchema) {
           return;
         }
         throw newRxError('SC8', {
-          fieldName: fieldName
+          fieldName
         });
       }
     }
   }
   function traverse(currentObj, currentPath) {
     if (!currentObj || typeof currentObj !== 'object') return;
-    Object.keys(currentObj).forEach(function (attributeName) {
+    Object.keys(currentObj).forEach(attributeName => {
       var schemaObj = currentObj[attributeName];
       if (!currentObj.properties && schemaObj && typeof schemaObj === 'object') {
         checkField(attributeName, schemaObj, currentPath);
@@ -162,7 +160,7 @@ export function checkPrimaryKey(jsonSchema) {
       throw newRxError('SC32', {
         schema: jsonSchema,
         args: {
-          schemaPart: schemaPart
+          schemaPart
         }
       });
     }
@@ -175,7 +173,7 @@ export function checkPrimaryKey(jsonSchema) {
     var compositePrimaryKey = jsonSchema.primaryKey;
     var keySchemaPart = getSchemaByObjectPath(jsonSchema, compositePrimaryKey.key);
     validatePrimarySchemaPart(keySchemaPart);
-    compositePrimaryKey.fields.forEach(function (field) {
+    compositePrimaryKey.fields.forEach(field => {
       var schemaPart = getSchemaByObjectPath(jsonSchema, field);
       validatePrimarySchemaPart(schemaPart);
     });
@@ -192,7 +190,7 @@ export function checkPrimaryKey(jsonSchema) {
     throw newRxError('SC39', {
       schema: jsonSchema,
       args: {
-        primaryPathSchemaPart: primaryPathSchemaPart
+        primaryPathSchemaPart
       }
     });
   }
@@ -245,31 +243,31 @@ export function checkSchema(jsonSchema) {
   }
   validateFieldsDeep(jsonSchema);
   checkPrimaryKey(jsonSchema);
-  Object.keys(jsonSchema.properties).forEach(function (key) {
+  Object.keys(jsonSchema.properties).forEach(key => {
     var value = jsonSchema.properties[key];
     // check primary
     if (key === jsonSchema.primaryKey) {
       if (jsonSchema.indexes && jsonSchema.indexes.includes(key)) {
         throw newRxError('SC13', {
-          value: value,
+          value,
           schema: jsonSchema
         });
       }
       if (value.unique) {
         throw newRxError('SC14', {
-          value: value,
+          value,
           schema: jsonSchema
         });
       }
       if (jsonSchema.encrypted && jsonSchema.encrypted.includes(key)) {
         throw newRxError('SC15', {
-          value: value,
+          value,
           schema: jsonSchema
         });
       }
       if (value.type !== 'string') {
         throw newRxError('SC16', {
-          value: value,
+          value,
           schema: jsonSchema
         });
       }
@@ -278,7 +276,7 @@ export function checkSchema(jsonSchema) {
     // check if RxDocument-property
     if (rxDocumentProperties().includes(key)) {
       throw newRxError('SC17', {
-        key: key,
+        key,
         schema: jsonSchema
       });
     }
@@ -293,11 +291,11 @@ export function checkSchema(jsonSchema) {
         schema: jsonSchema
       });
     }
-    jsonSchema.indexes.forEach(function (index) {
+    jsonSchema.indexes.forEach(index => {
       // should contain strings or array of strings
       if (!(typeof index === 'string' || Array.isArray(index))) {
         throw newRxError('SC19', {
-          index: index,
+          index,
           schema: jsonSchema
         });
       }
@@ -306,7 +304,7 @@ export function checkSchema(jsonSchema) {
         for (var i = 0; i < index.length; i += 1) {
           if (typeof index[i] !== 'string') {
             throw newRxError('SC20', {
-              index: index,
+              index,
               schema: jsonSchema
             });
           }
@@ -320,7 +318,7 @@ export function checkSchema(jsonSchema) {
        * Therefore we need to enforce some properties inside of the schema.
        */
       var indexAsArray = isMaybeReadonlyArray(index) ? index : [index];
-      indexAsArray.forEach(function (fieldName) {
+      indexAsArray.forEach(fieldName => {
         var schemaPart = getSchemaByObjectPath(jsonSchema, fieldName);
         var type = schemaPart.type;
         switch (type) {
@@ -328,7 +326,7 @@ export function checkSchema(jsonSchema) {
             var maxLength = schemaPart.maxLength;
             if (!maxLength) {
               throw newRxError('SC34', {
-                index: index,
+                index,
                 field: fieldName,
                 schema: jsonSchema
               });
@@ -339,7 +337,7 @@ export function checkSchema(jsonSchema) {
             var multipleOf = schemaPart.multipleOf;
             if (!multipleOf) {
               throw newRxError('SC35', {
-                index: index,
+                index,
                 field: fieldName,
                 schema: jsonSchema
               });
@@ -348,7 +346,7 @@ export function checkSchema(jsonSchema) {
             var minimum = schemaPart.minimum;
             if (typeof maximum === 'undefined' || typeof minimum === 'undefined') {
               throw newRxError('SC37', {
-                index: index,
+                index,
                 field: fieldName,
                 schema: jsonSchema
               });
@@ -369,7 +367,7 @@ export function checkSchema(jsonSchema) {
             var parentSchemaPart = parentPath === '' ? jsonSchema : getSchemaByObjectPath(jsonSchema, parentPath);
             if (!parentSchemaPart.required || !parentSchemaPart.required.includes(lastPathPart)) {
               throw newRxError('SC38', {
-                index: index,
+                index,
                 field: fieldName,
                 schema: jsonSchema
               });
@@ -377,7 +375,7 @@ export function checkSchema(jsonSchema) {
             break;
           default:
             throw newRxError('SC36', {
-              fieldName: fieldName,
+              fieldName,
               type: schemaPart.type,
               schema: jsonSchema
             });
@@ -387,21 +385,17 @@ export function checkSchema(jsonSchema) {
   }
 
   // remove backward-compatibility for index: true
-  Object.keys(flattenObject(jsonSchema)).map(function (key) {
+  Object.keys(flattenObject(jsonSchema)).map(key => {
     // flattenObject returns only ending paths, we need all paths pointing to an object
     var split = key.split('.');
     split.pop(); // all but last
     return split.join('.');
-  }).filter(function (key) {
-    return key !== '';
-  }).filter(function (elem, pos, arr) {
-    return arr.indexOf(elem) === pos;
-  }) // unique
-  .filter(function (key) {
+  }).filter(key => key !== '').filter((elem, pos, arr) => arr.indexOf(elem) === pos) // unique
+  .filter(key => {
     // check if this path defines an index
-    var value = objectPath.get(jsonSchema, key);
-    return !!value.index;
-  }).forEach(function (key) {
+    var value = getProperty(jsonSchema, key);
+    return value && !!value.index;
+  }).forEach(key => {
     // replace inner properties
     key = key.replace('properties.', ''); // first
     key = key.replace(/\.properties\./g, '.'); // middle
@@ -412,19 +406,17 @@ export function checkSchema(jsonSchema) {
   });
 
   /* check types of the indexes */
-  (jsonSchema.indexes || []).reduce(function (indexPaths, currentIndex) {
+  (jsonSchema.indexes || []).reduce((indexPaths, currentIndex) => {
     if (isMaybeReadonlyArray(currentIndex)) {
       indexPaths.concat(currentIndex);
     } else {
       indexPaths.push(currentIndex);
     }
     return indexPaths;
-  }, []).filter(function (elem, pos, arr) {
-    return arr.indexOf(elem) === pos;
-  }) // from now on working only with unique indexes
-  .map(function (indexPath) {
+  }, []).filter((elem, pos, arr) => arr.indexOf(elem) === pos) // from now on working only with unique indexes
+  .map(indexPath => {
     var realPath = getSchemaPropertyRealPath(indexPath); // real path in the collection schema
-    var schemaObj = objectPath.get(jsonSchema, realPath); // get the schema of the indexed property
+    var schemaObj = getProperty(jsonSchema, realPath); // get the schema of the indexed property
     if (!schemaObj || typeof schemaObj !== 'object') {
       throw newRxError('SC21', {
         index: indexPath,
@@ -432,12 +424,10 @@ export function checkSchema(jsonSchema) {
       });
     }
     return {
-      indexPath: indexPath,
-      schemaObj: schemaObj
+      indexPath,
+      schemaObj
     };
-  }).filter(function (index) {
-    return index.schemaObj.type !== 'string' && index.schemaObj.type !== 'integer' && index.schemaObj.type !== 'number' && index.schemaObj.type !== 'boolean';
-  }).forEach(function (index) {
+  }).filter(index => index.schemaObj.type !== 'string' && index.schemaObj.type !== 'integer' && index.schemaObj.type !== 'number' && index.schemaObj.type !== 'boolean').forEach(index => {
     throw newRxError('SC22', {
       key: index.indexPath,
       type: index.schemaObj.type,
@@ -451,21 +441,17 @@ export function checkSchema(jsonSchema) {
    * This check ensures people do not oversee the breaking change
    * Remove this check in the future
    */
-  Object.keys(flattenObject(jsonSchema)).map(function (key) {
+  Object.keys(flattenObject(jsonSchema)).map(key => {
     // flattenObject returns only ending paths, we need all paths pointing to an object
     var split = key.split('.');
     split.pop(); // all but last
     return split.join('.');
-  }).filter(function (key) {
-    return key !== '' && key !== 'attachments';
-  }).filter(function (elem, pos, arr) {
-    return arr.indexOf(elem) === pos;
-  }) // unique
-  .filter(function (key) {
+  }).filter(key => key !== '' && key !== 'attachments').filter((elem, pos, arr) => arr.indexOf(elem) === pos) // unique
+  .filter(key => {
     // check if this path defines an encrypted field
-    var value = objectPath.get(jsonSchema, key);
-    return !!value.encrypted;
-  }).forEach(function (key) {
+    var value = getProperty(jsonSchema, key);
+    return value && !!value.encrypted;
+  }).forEach(key => {
     // replace inner properties
     key = key.replace('properties.', ''); // first
     key = key.replace(/\.properties\./g, '.'); // middle
@@ -477,11 +463,11 @@ export function checkSchema(jsonSchema) {
 
   /* ensure encrypted fields exist in the schema */
   if (jsonSchema.encrypted) {
-    jsonSchema.encrypted.forEach(function (propPath) {
+    jsonSchema.encrypted.forEach(propPath => {
       // real path in the collection schema
       var realPath = getSchemaPropertyRealPath(propPath);
       // get the schema of the indexed property
-      var schemaObj = objectPath.get(jsonSchema, realPath);
+      var schemaObj = getProperty(jsonSchema, realPath);
       if (!schemaObj || typeof schemaObj !== 'object') {
         throw newRxError('SC28', {
           field: propPath,

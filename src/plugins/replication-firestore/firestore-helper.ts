@@ -5,9 +5,9 @@ import {
 import type {
     WithDeleted
 } from '../../types';
-import { flatClone, now } from '../../util';
+import { flatClone, now } from '../../plugins/utils';
 
-export const FIRESTORE_REPLICATION_PLUGIN_IDENTITY_PREFIX = 'rxdb-replication-firestore-';
+export const FIRESTORE_REPLICATION_PLUGIN_IDENTITY_PREFIX = 'firestore';
 
 
 export function getFirestoreSortFieldValue(docData: any, primaryKey: string): string {

@@ -1,6 +1,6 @@
 import assert from 'assert';
 import config from './config';
-import * as faker from 'faker';
+import { faker } from '@faker-js/faker';
 
 import * as humansCollection from '../helper/humans-collection';
 
@@ -11,10 +11,6 @@ import {
     createRxSchema,
     RxJsonSchema,
 } from '../../';
-
-import {
-    getRxStoragePouch
-} from '../../plugins/pouchdb';
 
 
 config.parallel('population.test.js', () => {
@@ -186,7 +182,7 @@ config.parallel('population.test.js', () => {
             it('populate string-array', async () => {
                 const db = await createRxDatabase({
                     name: randomCouchString(10),
-                    storage: getRxStoragePouch('memory'),
+                    storage: config.storage.getStorage(),
                 });
                 const cols = await db.addCollections({
                     human: {
@@ -235,7 +231,7 @@ config.parallel('population.test.js', () => {
             it('populate with primary as ref', async () => {
                 const db = await createRxDatabase({
                     name: randomCouchString(10),
-                    storage: getRxStoragePouch('memory'),
+                    storage: config.storage.getStorage(),
                 });
                 const schema: RxJsonSchema<{ name: string; }> = {
                     version: 0,
@@ -297,7 +293,7 @@ config.parallel('population.test.js', () => {
         it('#222 population not working when multiInstance: false', async () => {
             const db = await createRxDatabase({
                 name: randomCouchString(10),
-                storage: getRxStoragePouch('memory'),
+                storage: config.storage.getStorage(),
                 multiInstance: false // this must be false here
             });
             const cols = await db.addCollections({

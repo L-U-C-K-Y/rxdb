@@ -18,18 +18,18 @@ Object.keys(_nosqlQueryBuilder).forEach(function (key) {
   if (key in exports && exports[key] === _nosqlQueryBuilder[key]) return;
   Object.defineProperty(exports, key, {
     enumerable: true,
-    get: function get() {
+    get: function () {
       return _nosqlQueryBuilder[key];
     }
   });
 });
 var _rxQuery = require("../../rx-query");
-var _util = require("../../util");
+var _utils = require("../../plugins/utils");
 var _hooks = require("../../hooks");
 // if the query-builder plugin is used, we have to save its last path
 var RXQUERY_OTHER_FLAG = 'queryBuilderPath';
 function runBuildingStep(rxQuery, functionName, value) {
-  var queryBuilder = (0, _nosqlQueryBuilder.createQueryBuilder)((0, _util.clone)(rxQuery.mangoQuery));
+  var queryBuilder = (0, _nosqlQueryBuilder.createQueryBuilder)((0, _utils.clone)(rxQuery.mangoQuery));
   if (rxQuery.other[RXQUERY_OTHER_FLAG]) {
     queryBuilder._path = rxQuery.other[RXQUERY_OTHER_FLAG];
   }
@@ -57,14 +57,14 @@ var RxDBQueryBuilderPlugin = {
   name: 'query-builder',
   rxdb: true,
   prototypes: {
-    RxQuery: function RxQuery(proto) {
-      ['where', 'equals', 'eq', 'or', 'nor', 'and', 'mod', 'exists', 'elemMatch', 'sort'].forEach(function (attribute) {
+    RxQuery(proto) {
+      ['where', 'equals', 'eq', 'or', 'nor', 'and', 'mod', 'exists', 'elemMatch', 'sort'].forEach(attribute => {
         applyBuildingStep(proto, attribute);
       });
-      _nosqlQueryBuilder.OTHER_MANGO_ATTRIBUTES.forEach(function (attribute) {
+      _nosqlQueryBuilder.OTHER_MANGO_ATTRIBUTES.forEach(attribute => {
         applyBuildingStep(proto, attribute);
       });
-      _nosqlQueryBuilder.OTHER_MANGO_OPERATORS.forEach(function (operator) {
+      _nosqlQueryBuilder.OTHER_MANGO_OPERATORS.forEach(operator => {
         applyBuildingStep(proto, operator);
       });
     }

@@ -11,19 +11,18 @@ import {
     Subject,
     Observable
 } from 'rxjs';
-import deepEqual from 'fast-deep-equal';
 import {
     clone,
     toPromise,
     flatClone,
-    getHeightOfRevision,
     createRevision,
     PROMISE_RESOLVE_VOID,
     PROMISE_RESOLVE_FALSE,
     PROMISE_RESOLVE_NULL,
     getDefaultRxDocumentMeta,
-    now
-} from '../../util';
+    now,
+    deepEqual
+} from '../../plugins/utils';
 import {
     createRxSchema
 } from '../../rx-schema';
@@ -497,12 +496,10 @@ export async function _migrateDocuments(
              * data changed, increase revision height
              * so replicating instances use our new document data
              */
-            const newHeight = getHeightOfRevision(docData._rev) + 1;
-            const newRevision = newHeight + '-' + createRevision(
-                oldCollection.newestCollection.database.hashFunction,
-                migratedDocData
+            migratedDocData._rev = createRevision(
+                oldCollection.newestCollection.database.token,
+                docData
             );
-            migratedDocData._rev = newRevision;
         }
 
 

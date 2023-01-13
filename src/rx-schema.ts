@@ -1,11 +1,9 @@
-import deepEqual from 'fast-deep-equal';
-
 import {
     overwriteGetterForCaching,
-    flatClone,
     isMaybeReadonlyArray,
-    fastUnsecureHash
-} from './util';
+    fastUnsecureHash,
+    deepEqual
+} from './plugins/utils';
 import {
     newRxError,
 } from './rx-error';
@@ -96,18 +94,6 @@ export class RxSchema<RxDocType = any> {
     }
 
     /**
-     * fills all unset fields with default-values if set
-     */
-    fillObjectWithDefaults(obj: any): any {
-        obj = flatClone(obj);
-        Object
-            .entries(this.defaultValues)
-            .filter(([k]) => !obj.hasOwnProperty(k) || typeof obj[k] === 'undefined')
-            .forEach(([k, v]) => obj[k] = v);
-        return obj;
-    }
-
-    /**
      * creates the schema-based document-prototype,
      * see RxCollection.getDocumentPrototype()
      */
@@ -167,7 +153,7 @@ export function createRxSchema<T>(
     return schema;
 }
 
-export function isInstanceOf(obj: any): boolean {
+export function isRxSchema(obj: any): boolean {
     return obj instanceof RxSchema;
 }
 

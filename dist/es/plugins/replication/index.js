@@ -6,171 +6,13 @@
  */
 
 import { BehaviorSubject, combineLatest, mergeMap, Subject } from 'rxjs';
-import { ensureNotFalsy, fastUnsecureHash, flatClone, PROMISE_RESOLVE_FALSE, PROMISE_RESOLVE_TRUE } from '../../util';
+import { RxDBLeaderElectionPlugin } from '../leader-election';
+import { ensureNotFalsy, errorToPlainJson, fastUnsecureHash, flatClone, PROMISE_RESOLVE_FALSE, PROMISE_RESOLVE_TRUE, toArray } from '../../plugins/utils';
 import { awaitRxStorageReplicationFirstInSync, awaitRxStorageReplicationInSync, cancelRxStorageReplication, replicateRxStorageInstance, RX_REPLICATION_META_INSTANCE_SCHEMA } from '../../replication-protocol';
 import { newRxError } from '../../rx-error';
-import { awaitRetry, DEFAULT_MODIFIER, swapDefaultDeletedTodeletedField, swapdeletedFieldToDefaultDeleted } from './replication-helper';
+import { awaitRetry, DEFAULT_MODIFIER, swapDefaultDeletedTodeletedField, handlePulledDocuments } from './replication-helper';
 import { addConnectedStorageToCollection } from '../../rx-database-internal-store';
-function _catch(body, recover) {
-  try {
-    var result = body();
-  } catch (e) {
-    return recover(e);
-  }
-  if (result && result.then) {
-    return result.then(void 0, recover);
-  }
-  return result;
-}
-function _settle(pact, state, value) {
-  if (!pact.s) {
-    if (value instanceof _Pact) {
-      if (value.s) {
-        if (state & 1) {
-          state = value.s;
-        }
-        value = value.v;
-      } else {
-        value.o = _settle.bind(null, pact, state);
-        return;
-      }
-    }
-    if (value && value.then) {
-      value.then(_settle.bind(null, pact, state), _settle.bind(null, pact, 2));
-      return;
-    }
-    pact.s = state;
-    pact.v = value;
-    var observer = pact.o;
-    if (observer) {
-      observer(pact);
-    }
-  }
-}
-var _Pact = /*#__PURE__*/function () {
-  function _Pact() {}
-  _Pact.prototype.then = function (onFulfilled, onRejected) {
-    var result = new _Pact();
-    var state = this.s;
-    if (state) {
-      var callback = state & 1 ? onFulfilled : onRejected;
-      if (callback) {
-        try {
-          _settle(result, 1, callback(this.v));
-        } catch (e) {
-          _settle(result, 2, e);
-        }
-        return result;
-      } else {
-        return this;
-      }
-    }
-    this.o = function (_this) {
-      try {
-        var value = _this.v;
-        if (_this.s & 1) {
-          _settle(result, 1, onFulfilled ? onFulfilled(value) : value);
-        } else if (onRejected) {
-          _settle(result, 1, onRejected(value));
-        } else {
-          _settle(result, 2, value);
-        }
-      } catch (e) {
-        _settle(result, 2, e);
-      }
-    };
-    return result;
-  };
-  return _Pact;
-}();
-function _isSettledPact(thenable) {
-  return thenable instanceof _Pact && thenable.s & 1;
-}
-function _for(test, update, body) {
-  var stage;
-  for (;;) {
-    var shouldContinue = test();
-    if (_isSettledPact(shouldContinue)) {
-      shouldContinue = shouldContinue.v;
-    }
-    if (!shouldContinue) {
-      return result;
-    }
-    if (shouldContinue.then) {
-      stage = 0;
-      break;
-    }
-    var result = body();
-    if (result && result.then) {
-      if (_isSettledPact(result)) {
-        result = result.s;
-      } else {
-        stage = 1;
-        break;
-      }
-    }
-    if (update) {
-      var updateValue = update();
-      if (updateValue && updateValue.then && !_isSettledPact(updateValue)) {
-        stage = 2;
-        break;
-      }
-    }
-  }
-  var pact = new _Pact();
-  var reject = _settle.bind(null, pact, 2);
-  (stage === 0 ? shouldContinue.then(_resumeAfterTest) : stage === 1 ? result.then(_resumeAfterBody) : updateValue.then(_resumeAfterUpdate)).then(void 0, reject);
-  return pact;
-  function _resumeAfterBody(value) {
-    result = value;
-    do {
-      if (update) {
-        updateValue = update();
-        if (updateValue && updateValue.then && !_isSettledPact(updateValue)) {
-          updateValue.then(_resumeAfterUpdate).then(void 0, reject);
-          return;
-        }
-      }
-      shouldContinue = test();
-      if (!shouldContinue || _isSettledPact(shouldContinue) && !shouldContinue.v) {
-        _settle(pact, 1, result);
-        return;
-      }
-      if (shouldContinue.then) {
-        shouldContinue.then(_resumeAfterTest).then(void 0, reject);
-        return;
-      }
-      result = body();
-      if (_isSettledPact(result)) {
-        result = result.v;
-      }
-    } while (!result || !result.then);
-    result.then(_resumeAfterBody).then(void 0, reject);
-  }
-  function _resumeAfterTest(shouldContinue) {
-    if (shouldContinue) {
-      result = body();
-      if (result && result.then) {
-        result.then(_resumeAfterBody).then(void 0, reject);
-      } else {
-        _resumeAfterBody(result);
-      }
-    } else {
-      _settle(pact, 1, result);
-    }
-  }
-  function _resumeAfterUpdate() {
-    if (shouldContinue = test()) {
-      if (shouldContinue.then) {
-        shouldContinue.then(_resumeAfterTest).then(void 0, reject);
-      } else {
-        _resumeAfterTest(shouldContinue);
-      }
-    } else {
-      _settle(pact, 1, result);
-    }
-  }
-}
+import { addRxPlugin } from '../../plugin';
 export var REPLICATION_STATE_BY_COLLECTION = new WeakMap();
 export var RxReplicationState = /*#__PURE__*/function () {
   function RxReplicationState(
@@ -179,7 +21,6 @@ export var RxReplicationState = /*#__PURE__*/function () {
    * and to identify which documents state came from the remote.
    */
   replicationIdentifierHash, collection, deletedField, pull, push, live, retryTime, autoStart) {
-    var _this = this;
     this.subs = [];
     this.subjects = {
       received: new Subject(),
@@ -217,266 +58,184 @@ export var RxReplicationState = /*#__PURE__*/function () {
     replicationStates.push(this);
 
     // stop the replication when the collection gets destroyed
-    this.collection.onDestroy.push(function () {
-      return _this.cancel();
-    });
+    this.collection.onDestroy.push(() => this.cancel());
 
     // create getters for the observables
-    Object.keys(this.subjects).forEach(function (key) {
-      Object.defineProperty(_this, key + '$', {
-        get: function get() {
+    Object.keys(this.subjects).forEach(key => {
+      Object.defineProperty(this, key + '$', {
+        get: function () {
           return this.subjects[key].asObservable();
         }
       });
     });
-    var startPromise = new Promise(function (res) {
-      _this.callOnStart = res;
+    var startPromise = new Promise(res => {
+      this.callOnStart = res;
     });
     this.startPromise = startPromise;
   }
   var _proto = RxReplicationState.prototype;
-  _proto.start = function start() {
-    try {
-      var _this3 = this;
-      if (_this3.isStopped()) {
-        return Promise.resolve();
-      }
-
-      // fill in defaults for pull & push
-      var pullModifier = _this3.pull && _this3.pull.modifier ? _this3.pull.modifier : DEFAULT_MODIFIER;
-      var pushModifier = _this3.push && _this3.push.modifier ? _this3.push.modifier : DEFAULT_MODIFIER;
-      var database = _this3.collection.database;
-      var metaInstanceCollectionName = _this3.collection.name + '-rx-replication-' + _this3.replicationIdentifierHash;
-      return Promise.resolve(Promise.all([_this3.collection.database.storage.createStorageInstance({
-        databaseName: database.name,
-        collectionName: metaInstanceCollectionName,
-        databaseInstanceToken: database.token,
-        multiInstance: database.multiInstance,
-        // TODO is this always false?
-        options: {},
-        schema: RX_REPLICATION_META_INSTANCE_SCHEMA
-      }), addConnectedStorageToCollection(_this3.collection, metaInstanceCollectionName, RX_REPLICATION_META_INSTANCE_SCHEMA)])).then(function (_ref) {
-        var metaInstance = _ref[0];
-        function _temp2() {
-          _this3.callOnStart();
-        }
-        _this3.metaInstance = metaInstance;
-        _this3.internalReplicationState = replicateRxStorageInstance({
-          pushBatchSize: _this3.push && _this3.push.batchSize ? _this3.push.batchSize : 100,
-          pullBatchSize: _this3.pull && _this3.pull.batchSize ? _this3.pull.batchSize : 100,
-          forkInstance: _this3.collection.storageInstance,
-          metaInstance: _this3.metaInstance,
-          hashFunction: database.hashFunction,
-          identifier: 'rx-replication-' + _this3.replicationIdentifierHash,
-          conflictHandler: _this3.collection.conflictHandler,
-          replicationHandler: {
-            masterChangeStream$: _this3.remoteEvents$.asObservable().pipe(mergeMap(function (ev) {
-              try {
-                if (ev === 'RESYNC') {
-                  return Promise.resolve(ev);
-                }
-                var useEv = flatClone(ev);
-                if (_this3.deletedField !== '_deleted') {
-                  useEv.documents = useEv.documents.map(function (doc) {
-                    return swapdeletedFieldToDefaultDeleted(_this3.deletedField, doc);
-                  });
-                }
-                return Promise.resolve(Promise.all(useEv.documents.map(function (d) {
-                  return pullModifier(d);
-                }))).then(function (_Promise$all) {
-                  useEv.documents = _Promise$all;
-                  return useEv;
-                });
-              } catch (e) {
-                return Promise.reject(e);
-              }
-            })),
-            masterChangesSince: function (checkpoint, batchSize) {
-              try {
-                var _temp6 = function _temp6() {
-                  if (_this3.isStopped()) {
-                    return {
-                      checkpoint: null,
-                      documents: []
-                    };
-                  }
-                  var useResult = flatClone(result);
-                  if (_this3.deletedField !== '_deleted') {
-                    useResult.documents = useResult.documents.map(function (doc) {
-                      return swapdeletedFieldToDefaultDeleted(_this3.deletedField, doc);
-                    });
-                  }
-                  return Promise.resolve(Promise.all(useResult.documents.map(function (d) {
-                    return pullModifier(d);
-                  }))).then(function (_Promise$all2) {
-                    useResult.documents = _Promise$all2;
-                    return useResult;
-                  });
-                };
-                if (!_this3.pull) {
-                  return Promise.resolve({
-                    checkpoint: null,
-                    documents: []
-                  });
-                }
-
-                /**
-                 * Retries must be done here in the replication primitives plugin,
-                 * because the replication protocol itself has no
-                 * error handling.
-                 */
-                var done = false;
-                var result = {};
-                var _temp7 = _for(function () {
-                  return !done && !_this3.isStopped();
-                }, void 0, function () {
-                  var _temp3 = _catch(function () {
-                    return Promise.resolve(_this3.pull.handler(checkpoint, batchSize)).then(function (_this3$pull$handler) {
-                      result = _this3$pull$handler;
-                      done = true;
-                    });
-                  }, function (err) {
-                    var emitError = newRxError('RC_PULL', {
-                      checkpoint: checkpoint,
-                      errors: Array.isArray(err) ? err : [err],
-                      direction: 'pull'
-                    });
-                    _this3.subjects.error.next(emitError);
-                    return Promise.resolve(awaitRetry(_this3.collection, ensureNotFalsy(_this3.retryTime))).then(function () {});
-                  });
-                  if (_temp3 && _temp3.then) return _temp3.then(function () {});
-                });
-                return Promise.resolve(_temp7 && _temp7.then ? _temp7.then(_temp6) : _temp6(_temp7));
-              } catch (e) {
-                return Promise.reject(e);
-              }
-            },
-            masterWrite: function (rows) {
-              try {
-                if (!_this3.push) {
-                  return Promise.resolve([]);
-                }
-                var done = false;
-                return Promise.resolve(Promise.all(rows.map(function (row) {
-                  try {
-                    return Promise.resolve(pushModifier(row.newDocumentState)).then(function (_pushModifier) {
-                      function _temp11() {
-                        if (_this3.deletedField !== '_deleted') {
-                          row.newDocumentState = swapDefaultDeletedTodeletedField(_this3.deletedField, row.newDocumentState);
-                          if (row.assumedMasterState) {
-                            row.assumedMasterState = swapDefaultDeletedTodeletedField(_this3.deletedField, row.assumedMasterState);
-                          }
-                        }
-                        return row;
-                      }
-                      row.newDocumentState = _pushModifier;
-                      var _temp10 = function () {
-                        if (row.assumedMasterState) {
-                          return Promise.resolve(pushModifier(row.assumedMasterState)).then(function (_pushModifier2) {
-                            row.assumedMasterState = _pushModifier2;
-                          });
-                        }
-                      }();
-                      return _temp10 && _temp10.then ? _temp10.then(_temp11) : _temp11(_temp10);
-                    });
-                  } catch (e) {
-                    return Promise.reject(e);
-                  }
-                }))).then(function (useRows) {
-                  var _exit = false;
-                  function _temp9(_result2) {
-                    if (_exit) return _result2;
-                    if (_this3.isStopped()) {
-                      return [];
-                    }
-                    var conflicts = ensureNotFalsy(result).map(function (doc) {
-                      return swapdeletedFieldToDefaultDeleted(_this3.deletedField, doc);
-                    });
-                    return conflicts;
-                  }
-                  var result = null;
-                  var _temp8 = _for(function () {
-                    return !_exit && !done && !_this3.isStopped();
-                  }, void 0, function () {
-                    return _catch(function () {
-                      return Promise.resolve(_this3.push.handler(useRows)).then(function (_this3$push$handler) {
-                        result = _this3$push$handler;
-                        /**
-                         * It is a common problem that people have wrongly behaving backend
-                         * that do not return an array with the conflicts on push requests.
-                         * So we run this check here to make it easier to debug.
-                         * @link https://github.com/pubkey/rxdb/issues/4103
-                         */
-                        if (!Array.isArray(result)) {
-                          throw newRxError('RC_PUSH_NO_AR', {
-                            pushRows: rows,
-                            direction: 'push',
-                            args: {
-                              result: result
-                            }
-                          });
-                        }
-                        done = true;
-                      });
-                    }, function (err) {
-                      var emitError = err.rxdb ? err : newRxError('RC_PUSH', {
-                        pushRows: rows,
-                        errors: Array.isArray(err) ? err : [err],
-                        direction: 'push'
-                      });
-                      _this3.subjects.error.next(emitError);
-                      return Promise.resolve(awaitRetry(_this3.collection, ensureNotFalsy(_this3.retryTime))).then(function () {});
-                    });
-                  });
-                  return _temp8 && _temp8.then ? _temp8.then(_temp9) : _temp9(_temp8);
-                });
-              } catch (e) {
-                return Promise.reject(e);
-              }
-            }
-          }
-        });
-        _this3.subs.push(_this3.internalReplicationState.events.error.subscribe(function (err) {
-          _this3.subjects.error.next(err);
-        }), _this3.internalReplicationState.events.processed.down.subscribe(function (row) {
-          return _this3.subjects.received.next(row.document);
-        }), _this3.internalReplicationState.events.processed.up.subscribe(function (writeToMasterRow) {
-          _this3.subjects.send.next(writeToMasterRow.newDocumentState);
-        }), combineLatest([_this3.internalReplicationState.events.active.down, _this3.internalReplicationState.events.active.up]).subscribe(function (_ref2) {
-          var down = _ref2[0],
-            up = _ref2[1];
-          var isActive = down || up;
-          _this3.subjects.active.next(isActive);
-        }));
-        if (_this3.pull && _this3.pull.stream$ && _this3.live) {
-          _this3.subs.push(_this3.pull.stream$.subscribe({
-            next: function next(ev) {
-              _this3.remoteEvents$.next(ev);
-            },
-            error: function error(err) {
-              _this3.subjects.error.next(err);
-            }
-          }));
-        }
-
-        /**
-         * Non-live replications run once
-         * and then automatically get canceled.
-         */
-        var _temp = function () {
-          if (!_this3.live) {
-            return Promise.resolve(awaitRxStorageReplicationFirstInSync(_this3.internalReplicationState)).then(function () {
-              return Promise.resolve(awaitRxStorageReplicationInSync(_this3.internalReplicationState)).then(function () {
-                return Promise.resolve(_this3.cancel()).then(function () {});
-              });
-            });
-          }
-        }();
-        return _temp && _temp.then ? _temp.then(_temp2) : _temp2(_temp);
-      });
-    } catch (e) {
-      return Promise.reject(e);
+  _proto.start = async function start() {
+    if (this.isStopped()) {
+      return;
     }
+
+    // fill in defaults for pull & push
+    var pullModifier = this.pull && this.pull.modifier ? this.pull.modifier : DEFAULT_MODIFIER;
+    var pushModifier = this.push && this.push.modifier ? this.push.modifier : DEFAULT_MODIFIER;
+    var database = this.collection.database;
+    var metaInstanceCollectionName = this.collection.name + '-rx-replication-' + this.replicationIdentifierHash;
+    var [metaInstance] = await Promise.all([this.collection.database.storage.createStorageInstance({
+      databaseName: database.name,
+      collectionName: metaInstanceCollectionName,
+      databaseInstanceToken: database.token,
+      multiInstance: database.multiInstance,
+      // TODO is this always false?
+      options: {},
+      schema: RX_REPLICATION_META_INSTANCE_SCHEMA
+    }), addConnectedStorageToCollection(this.collection, metaInstanceCollectionName, RX_REPLICATION_META_INSTANCE_SCHEMA)]);
+    this.metaInstance = metaInstance;
+    this.internalReplicationState = replicateRxStorageInstance({
+      pushBatchSize: this.push && this.push.batchSize ? this.push.batchSize : 100,
+      pullBatchSize: this.pull && this.pull.batchSize ? this.pull.batchSize : 100,
+      forkInstance: this.collection.storageInstance,
+      metaInstance: this.metaInstance,
+      hashFunction: database.hashFunction,
+      identifier: 'rxdbreplication' + this.replicationIdentifierHash,
+      conflictHandler: this.collection.conflictHandler,
+      replicationHandler: {
+        masterChangeStream$: this.remoteEvents$.asObservable().pipe(mergeMap(async ev => {
+          if (ev === 'RESYNC') {
+            return ev;
+          }
+          var useEv = flatClone(ev);
+          useEv.documents = handlePulledDocuments(this.collection, this.deletedField, useEv.documents);
+          useEv.documents = await Promise.all(useEv.documents.map(d => pullModifier(d)));
+          return useEv;
+        })),
+        masterChangesSince: async (checkpoint, batchSize) => {
+          if (!this.pull) {
+            return {
+              checkpoint: null,
+              documents: []
+            };
+          }
+          /**
+           * Retries must be done here in the replication primitives plugin,
+           * because the replication protocol itself has no
+           * error handling.
+           */
+          var done = false;
+          var result = {};
+          while (!done && !this.isStopped()) {
+            try {
+              result = await this.pull.handler(checkpoint, batchSize);
+              done = true;
+            } catch (err) {
+              var emitError = newRxError('RC_PULL', {
+                checkpoint,
+                errors: toArray(err).map(er => errorToPlainJson(er)),
+                direction: 'pull'
+              });
+              this.subjects.error.next(emitError);
+              await awaitRetry(this.collection, ensureNotFalsy(this.retryTime));
+            }
+          }
+          if (this.isStopped()) {
+            return {
+              checkpoint: null,
+              documents: []
+            };
+          }
+          var useResult = flatClone(result);
+          useResult.documents = handlePulledDocuments(this.collection, this.deletedField, useResult.documents);
+          useResult.documents = await Promise.all(useResult.documents.map(d => pullModifier(d)));
+          return useResult;
+        },
+        masterWrite: async rows => {
+          if (!this.push) {
+            return [];
+          }
+          var done = false;
+          var useRows = await Promise.all(rows.map(async row => {
+            row.newDocumentState = await pushModifier(row.newDocumentState);
+            if (row.assumedMasterState) {
+              row.assumedMasterState = await pushModifier(row.assumedMasterState);
+            }
+            if (this.deletedField !== '_deleted') {
+              row.newDocumentState = swapDefaultDeletedTodeletedField(this.deletedField, row.newDocumentState);
+              if (row.assumedMasterState) {
+                row.assumedMasterState = swapDefaultDeletedTodeletedField(this.deletedField, row.assumedMasterState);
+              }
+            }
+            return row;
+          }));
+          var result = null;
+          while (!done && !this.isStopped()) {
+            try {
+              result = await this.push.handler(useRows);
+              /**
+               * It is a common problem that people have wrongly behaving backend
+               * that do not return an array with the conflicts on push requests.
+               * So we run this check here to make it easier to debug.
+               * @link https://github.com/pubkey/rxdb/issues/4103
+               */
+              if (!Array.isArray(result)) {
+                throw newRxError('RC_PUSH_NO_AR', {
+                  pushRows: rows,
+                  direction: 'push',
+                  args: {
+                    result
+                  }
+                });
+              }
+              done = true;
+            } catch (err) {
+              var emitError = err.rxdb ? err : newRxError('RC_PUSH', {
+                pushRows: rows,
+                errors: toArray(err).map(er => errorToPlainJson(er)),
+                direction: 'push'
+              });
+              this.subjects.error.next(emitError);
+              await awaitRetry(this.collection, ensureNotFalsy(this.retryTime));
+            }
+          }
+          if (this.isStopped()) {
+            return [];
+          }
+          var conflicts = handlePulledDocuments(this.collection, this.deletedField, ensureNotFalsy(result));
+          return conflicts;
+        }
+      }
+    });
+    this.subs.push(this.internalReplicationState.events.error.subscribe(err => {
+      this.subjects.error.next(err);
+    }), this.internalReplicationState.events.processed.down.subscribe(row => this.subjects.received.next(row.document)), this.internalReplicationState.events.processed.up.subscribe(writeToMasterRow => {
+      this.subjects.send.next(writeToMasterRow.newDocumentState);
+    }), combineLatest([this.internalReplicationState.events.active.down, this.internalReplicationState.events.active.up]).subscribe(([down, up]) => {
+      var isActive = down || up;
+      this.subjects.active.next(isActive);
+    }));
+    if (this.pull && this.pull.stream$ && this.live) {
+      this.subs.push(this.pull.stream$.subscribe({
+        next: ev => {
+          this.remoteEvents$.next(ev);
+        },
+        error: err => {
+          this.subjects.error.next(err);
+        }
+      }));
+    }
+
+    /**
+     * Non-live replications run once
+     * and then automatically get canceled.
+     */
+    if (!this.live) {
+      await awaitRxStorageReplicationFirstInSync(this.internalReplicationState);
+      await awaitRxStorageReplicationInSync(this.internalReplicationState);
+      await this.cancel();
+    }
+    this.callOnStart();
   };
   _proto.isStopped = function isStopped() {
     if (this.subjects.canceled.getValue()) {
@@ -484,16 +243,11 @@ export var RxReplicationState = /*#__PURE__*/function () {
     }
     return false;
   };
-  _proto.awaitInitialReplication = function awaitInitialReplication() {
-    try {
-      var _this5 = this;
-      return Promise.resolve(_this5.startPromise).then(function () {
-        return awaitRxStorageReplicationFirstInSync(ensureNotFalsy(_this5.internalReplicationState));
-      });
-    } catch (e) {
-      return Promise.reject(e);
-    }
+  _proto.awaitInitialReplication = async function awaitInitialReplication() {
+    await this.startPromise;
+    return awaitRxStorageReplicationFirstInSync(ensureNotFalsy(this.internalReplicationState));
   }
+
   /**
    * Returns a promise that resolves when:
    * - All local data is replicated with the remote
@@ -503,29 +257,20 @@ export var RxReplicationState = /*#__PURE__*/function () {
    * is dangerous because only the leading instance will ever be replicated,
    * so this promise will not resolve in the other tabs.
    * For multi-tab support you should set and observe a flag in a local document.
-   */
-  ;
-  _proto.awaitInSync = function awaitInSync() {
-    try {
-      var _this7 = this;
-      return Promise.resolve(_this7.startPromise).then(function () {
-        return Promise.resolve(awaitRxStorageReplicationFirstInSync(ensureNotFalsy(_this7.internalReplicationState))).then(function () {
-          /**
-           * Often awaitInSync() is called directly after a document write,
-           * like in the unit tests.
-           * So we first have to await the idleness to ensure that all RxChangeEvents
-           * are processed already.
-           */
-          return Promise.resolve(_this7.collection.database.requestIdlePromise()).then(function () {
-            return Promise.resolve(awaitRxStorageReplicationInSync(ensureNotFalsy(_this7.internalReplicationState))).then(function () {
-              return true;
-            });
-          });
-        });
-      });
-    } catch (e) {
-      return Promise.reject(e);
-    }
+   */;
+  _proto.awaitInSync = async function awaitInSync() {
+    await this.startPromise;
+    await awaitRxStorageReplicationFirstInSync(ensureNotFalsy(this.internalReplicationState));
+
+    /**
+     * Often awaitInSync() is called directly after a document write,
+     * like in the unit tests.
+     * So we first have to await the idleness to ensure that all RxChangeEvents
+     * are processed already.
+     */
+    await this.collection.database.requestIdlePromise();
+    await awaitRxStorageReplicationInSync(ensureNotFalsy(this.internalReplicationState));
+    return true;
   };
   _proto.reSync = function reSync() {
     this.remoteEvents$.next('RESYNC');
@@ -534,7 +279,6 @@ export var RxReplicationState = /*#__PURE__*/function () {
     this.remoteEvents$.next(ev);
   };
   _proto.cancel = function cancel() {
-    var _this8 = this;
     if (this.isStopped()) {
       return PROMISE_RESOLVE_FALSE;
     }
@@ -543,13 +287,9 @@ export var RxReplicationState = /*#__PURE__*/function () {
       cancelRxStorageReplication(this.internalReplicationState);
     }
     if (this.metaInstance) {
-      promises.push(ensureNotFalsy(this.internalReplicationState).checkpointQueue.then(function () {
-        return ensureNotFalsy(_this8.metaInstance).close();
-      }));
+      promises.push(ensureNotFalsy(this.internalReplicationState).checkpointQueue.then(() => ensureNotFalsy(this.metaInstance).close()));
     }
-    this.subs.forEach(function (sub) {
-      return sub.unsubscribe();
-    });
+    this.subs.forEach(sub => sub.unsubscribe());
     this.subjects.canceled.next(true);
     this.subjects.active.complete();
     this.subjects.canceled.complete();
@@ -560,21 +300,18 @@ export var RxReplicationState = /*#__PURE__*/function () {
   };
   return RxReplicationState;
 }();
-export function replicateRxCollection(_ref3) {
-  var replicationIdentifier = _ref3.replicationIdentifier,
-    collection = _ref3.collection,
-    _ref3$deletedField = _ref3.deletedField,
-    deletedField = _ref3$deletedField === void 0 ? '_deleted' : _ref3$deletedField,
-    pull = _ref3.pull,
-    push = _ref3.push,
-    _ref3$live = _ref3.live,
-    live = _ref3$live === void 0 ? true : _ref3$live,
-    _ref3$retryTime = _ref3.retryTime,
-    retryTime = _ref3$retryTime === void 0 ? 1000 * 5 : _ref3$retryTime,
-    _ref3$waitForLeadersh = _ref3.waitForLeadership,
-    waitForLeadership = _ref3$waitForLeadersh === void 0 ? true : _ref3$waitForLeadersh,
-    _ref3$autoStart = _ref3.autoStart,
-    autoStart = _ref3$autoStart === void 0 ? true : _ref3$autoStart;
+export function replicateRxCollection({
+  replicationIdentifier,
+  collection,
+  deletedField = '_deleted',
+  pull,
+  push,
+  live = true,
+  retryTime = 1000 * 5,
+  waitForLeadership = true,
+  autoStart = true
+}) {
+  addRxPlugin(RxDBLeaderElectionPlugin);
   var replicationIdentifierHash = fastUnsecureHash([collection.database.name, collection.name, replicationIdentifier].join('|'));
   var replicationState = new RxReplicationState(replicationIdentifierHash, collection, deletedField, pull, push, live, retryTime, autoStart);
   startReplicationOnLeaderShip(waitForLeadership, replicationState);
@@ -587,7 +324,7 @@ export function startReplicationOnLeaderShip(waitForLeadership, replicationState
    */
   var mustWaitForLeadership = waitForLeadership && replicationState.collection.database.multiInstance;
   var waitTillRun = mustWaitForLeadership ? replicationState.collection.database.waitForLeadership() : PROMISE_RESOLVE_TRUE;
-  return waitTillRun.then(function () {
+  return waitTillRun.then(() => {
     if (replicationState.isStopped()) {
       return;
     }

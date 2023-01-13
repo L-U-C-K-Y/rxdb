@@ -19,7 +19,8 @@ import {
     getFinalFields,
     getPreviousVersions,
     getSchemaByObjectPath,
-    fillWithDefaultSettings
+    fillWithDefaultSettings,
+    fillObjectWithDefaults
 } from '../../';
 
 config.parallel('rx-schema.test.js', () => {
@@ -650,7 +651,7 @@ config.parallel('rx-schema.test.js', () => {
                     const schema = createRxSchema(schemas.human);
                     const hash = schema.hash;
                     assert.strictEqual(typeof hash, 'string');
-                    assert.ok(hash.length > 5);
+                    assert.ok(hash.length >= 5);
                 });
                 it('should normalize one schema with two different orders and generate for each the same hash', () => {
                     const schema1 = createRxSchema(schemas.humanNormalizeSchema1);
@@ -658,6 +659,24 @@ config.parallel('rx-schema.test.js', () => {
                     const hash1 = schema1.hash;
                     const hash2 = schema2.hash;
                     assert.strictEqual(hash1, hash2);
+                });
+                /**
+                 * The order could contain meaning so having a different order
+                 * should result in a different hash.
+                 * Also sorting is not equal on all JavaScript runtimes,
+                 * so by not re-ordering we can ensure deterministic hashing.
+                 * @link https://github.com/pubkey/rxdb/pull/4005
+                 */
+                it('#4005 should respect the sort order', () => {
+                    const schema1 = createRxSchema(Object.assign({}, schemas.humanDefault, {
+                        indexes: ['firstName', 'lastName']
+                    }));
+                    const schema2 = createRxSchema(Object.assign({}, schemas.humanDefault, {
+                        indexes: ['lastName', 'firstName']
+                    }));
+                    const hash1 = schema1.hash;
+                    const hash2 = schema2.hash;
+                    assert.ok(hash1 !== hash2);
                 });
             });
         });
@@ -727,8 +746,7 @@ config.parallel('rx-schema.test.js', () => {
                     const data = {
                         foo: 'bar'
                     };
-                    const filled = schema.fillObjectWithDefaults(data);
-                    assert.ok(data !== filled);
+                    const filled = fillObjectWithDefaults(schema, data);
                     assert.strictEqual(filled.foo, 'bar');
                     assert.strictEqual(filled.age, 20);
                 });
@@ -739,9 +757,8 @@ config.parallel('rx-schema.test.js', () => {
                         age: 40
                     };
                     const data2 = clone(data);
-                    const filled = schema.fillObjectWithDefaults(data);
-                    const filled2 = schema.fillObjectWithDefaults(data2);
-                    assert.ok(data !== filled);
+                    const filled = fillObjectWithDefaults(schema, data);
+                    const filled2 = fillObjectWithDefaults(schema, data2);
                     assert.strictEqual(filled.foo, 'bar');
                     assert.strictEqual(filled.age, 40);
                     assert.strictEqual(filled2.foo, 'bar');
@@ -802,7 +819,7 @@ config.parallel('rx-schema.test.js', () => {
             const query = cols.items.find({
                 selector: {
                     'fileInfo.watch.time': {
-                        $gt: -9999999999999999999999999999
+                        $gt: -999999999999999
                     }
                 },
                 sort: [

@@ -2,7 +2,7 @@
  * this file contains objects which match the schemas in schemas.js
  */
 
-import faker from 'faker';
+import { faker } from '@faker-js/faker';
 
 import {
     randomNumber,
@@ -95,8 +95,8 @@ export interface NestedHumanDocumentType {
         level: number;
     };
 }
-export function nestedHuman(): NestedHumanDocumentType {
-    return {
+export function nestedHuman(partial: Partial<NestedHumanDocumentType> = {}): NestedHumanDocumentType {
+    const defaultObj = {
         passportId: randomString(12),
         firstName: faker.name.firstName(),
         mainSkill: {
@@ -104,6 +104,10 @@ export function nestedHuman(): NestedHumanDocumentType {
             level: 5
         }
     };
+    return Object.assign(
+        defaultObj,
+        partial
+    );
 }
 
 export interface DeepNestedHumanDocumentType {
@@ -169,11 +173,15 @@ export interface SimpleHeroArrayDocumentType {
     name: string;
     skills: string[];
 }
-export function simpleHeroArray(): SimpleHeroArrayDocumentType {
-    return {
+export function simpleHeroArray(partial: Partial<SimpleHeroArrayDocumentType> = {}): SimpleHeroArrayDocumentType {
+    const defaultObj = {
         name: randomString(6),
         skills: new Array(3).fill(0).map(() => randomString(6))
     };
+    return Object.assign(
+        defaultObj,
+        partial
+    );
 }
 
 export interface EncryptedHumanDocumentType {
@@ -401,12 +409,16 @@ export type HumanWithCompositePrimary = {
         age: number;
     };
 };
-export function humanWithCompositePrimary(): HumanWithCompositePrimary {
-    return {
+export function humanWithCompositePrimary(partial: Partial<HumanWithCompositePrimary> = {}): HumanWithCompositePrimary {
+    const defaultObj = {
         firstName: faker.name.firstName(),
         lastName: faker.name.lastName(),
         info: {
             age: randomNumber(10, 50)
         }
     };
+    return Object.assign(
+        defaultObj,
+        partial
+    );
 }

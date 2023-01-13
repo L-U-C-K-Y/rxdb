@@ -8,122 +8,93 @@ exports.RxDBcrdtPlugin = exports.RX_CRDT_CONTEXT = void 0;
 exports.getCRDTConflictHandler = getCRDTConflictHandler;
 exports.getCRDTSchemaPart = getCRDTSchemaPart;
 exports.hashCRDTOperations = hashCRDTOperations;
-exports.insertCRDT = void 0;
+exports.insertCRDT = insertCRDT;
 exports.mergeCRDTFields = mergeCRDTFields;
 exports.rebuildFromCRDT = rebuildFromCRDT;
 exports.sortOperationComparator = sortOperationComparator;
-exports.updateCRDT = void 0;
+exports.updateCRDT = updateCRDT;
 var _rxError = require("../../rx-error");
-var _fastDeepEqual = _interopRequireDefault(require("fast-deep-equal"));
-var _objectPath = _interopRequireDefault(require("object-path"));
-var _util = require("../../util");
+var _utils = require("../../plugins/utils");
 var _modifyjs = _interopRequireDefault(require("modifyjs"));
 var _ = require("../..");
-var insertCRDT = function insertCRDT(entry) {
-  try {
-    var _this4 = this;
-    entry = _.overwritable.deepFreezeWhenDevMode(entry);
-    var jsonSchema = _this4.schema.jsonSchema;
-    if (!jsonSchema.crdt) {
-      throw (0, _rxError.newRxError)('CRDT1', {
-        schema: jsonSchema,
-        queryObj: entry
-      });
-    }
-    var crdtOptions = (0, _util.ensureNotFalsy)(jsonSchema.crdt);
-    return Promise.resolve(_this4.database.storageToken).then(function (storageToken) {
-      var operation = {
-        body: Array.isArray(entry) ? entry : [entry],
-        creator: storageToken,
-        time: (0, _util.now)()
-      };
-      var insertData = {};
-      insertData = runOperationOnDocument(_this4.database.storage.statics, _this4.schema.jsonSchema, insertData, operation);
-      var crdtDocField = {
-        operations: [],
-        hash: ''
-      };
-      _objectPath["default"].set(insertData, crdtOptions.field, crdtDocField);
-      var lastAr = [operation];
-      crdtDocField.operations.push(lastAr);
-      crdtDocField.hash = hashCRDTOperations(_this4.database.hashFunction, crdtDocField);
-      return Promise.resolve(_this4.insert(insertData)["catch"](function (err) {
-        try {
-          if (err.code === 'COL19') {
-            // was a conflict, update document instead of inserting
-            return Promise.resolve(_this4.findOne(err.parameters.id).exec(true)).then(function (doc) {
-              return doc.updateCRDT(entry);
-            });
-          } else {
-            throw err;
-          }
-        } catch (e) {
-          return Promise.reject(e);
-        }
-      }));
+async function updateCRDT(entry) {
+  entry = _.overwritable.deepFreezeWhenDevMode(entry);
+  var jsonSchema = this.collection.schema.jsonSchema;
+  if (!jsonSchema.crdt) {
+    throw (0, _rxError.newRxError)('CRDT1', {
+      schema: jsonSchema,
+      queryObj: entry
     });
-  } catch (e) {
-    return Promise.reject(e);
   }
-};
-exports.insertCRDT = insertCRDT;
-var updateCRDT = function updateCRDT(entry) {
-  try {
-    var _this2 = this;
-    entry = _.overwritable.deepFreezeWhenDevMode(entry);
-    var jsonSchema = _this2.collection.schema.jsonSchema;
-    if (!jsonSchema.crdt) {
-      throw (0, _rxError.newRxError)('CRDT1', {
-        schema: jsonSchema,
-        queryObj: entry
-      });
-    }
-    var crdtOptions = (0, _util.ensureNotFalsy)(jsonSchema.crdt);
-    return Promise.resolve(_this2.collection.database.storageToken).then(function (storageToken) {
-      return _this2.atomicUpdate(function (docData, rxDoc) {
-        var crdtDocField = (0, _util.clone)(_objectPath["default"].get(docData, crdtOptions.field));
-        var operation = {
-          body: Array.isArray(entry) ? entry : [entry],
-          creator: storageToken,
-          time: (0, _util.now)()
-        };
+  var crdtOptions = (0, _utils.ensureNotFalsy)(jsonSchema.crdt);
+  var storageToken = await this.collection.database.storageToken;
+  return this.incrementalModify(docData => {
+    var crdtDocField = (0, _utils.clone)((0, _utils.getProperty)(docData, crdtOptions.field));
+    var operation = {
+      body: (0, _utils.toArray)(entry),
+      creator: storageToken,
+      time: (0, _utils.now)()
+    };
 
-        /**
-         * A new write will ALWAYS be an operation in the last
-         * array which was non existing before.
-         */
-        var lastAr = [operation];
-        crdtDocField.operations.push(lastAr);
-        crdtDocField.hash = hashCRDTOperations(_this2.collection.database.hashFunction, crdtDocField);
-        var newDocData = (0, _util.clone)(rxDoc.toJSON());
-        newDocData._deleted = rxDoc._data._deleted;
-        newDocData = runOperationOnDocument(_this2.collection.database.storage.statics, _this2.collection.schema.jsonSchema, newDocData, operation);
-        _objectPath["default"].set(newDocData, crdtOptions.field, crdtDocField);
-
-        // add other internal fields
-        var fullDocData = Object.assign({
-          _attachments: rxDoc._data._attachments,
-          _meta: rxDoc._data._meta,
-          _rev: rxDoc._data._rev
-        }, newDocData);
-        return fullDocData;
-      }, RX_CRDT_CONTEXT);
+    /**
+     * A new write will ALWAYS be an operation in the last
+     * array which was non existing before.
+     */
+    var lastAr = [operation];
+    crdtDocField.operations.push(lastAr);
+    crdtDocField.hash = hashCRDTOperations(this.collection.database.hashFunction, crdtDocField);
+    docData = runOperationOnDocument(this.collection.database.storage.statics, this.collection.schema.jsonSchema, docData, operation);
+    (0, _utils.setProperty)(docData, crdtOptions.field, crdtDocField);
+    return docData;
+  }, RX_CRDT_CONTEXT);
+}
+async function insertCRDT(entry) {
+  entry = _.overwritable.deepFreezeWhenDevMode(entry);
+  var jsonSchema = this.schema.jsonSchema;
+  if (!jsonSchema.crdt) {
+    throw (0, _rxError.newRxError)('CRDT1', {
+      schema: jsonSchema,
+      queryObj: entry
     });
-  } catch (e) {
-    return Promise.reject(e);
   }
-};
-exports.updateCRDT = updateCRDT;
+  var crdtOptions = (0, _utils.ensureNotFalsy)(jsonSchema.crdt);
+  var storageToken = await this.database.storageToken;
+  var operation = {
+    body: Array.isArray(entry) ? entry : [entry],
+    creator: storageToken,
+    time: (0, _utils.now)()
+  };
+  var insertData = {};
+  insertData = runOperationOnDocument(this.database.storage.statics, this.schema.jsonSchema, insertData, operation);
+  var crdtDocField = {
+    operations: [],
+    hash: ''
+  };
+  (0, _utils.setProperty)(insertData, crdtOptions.field, crdtDocField);
+  var lastAr = [operation];
+  crdtDocField.operations.push(lastAr);
+  crdtDocField.hash = hashCRDTOperations(this.database.hashFunction, crdtDocField);
+  var result = await this.insert(insertData).catch(async err => {
+    if (err.code === 'CONFLICT') {
+      // was a conflict, update document instead of inserting
+      var doc = await this.findOne(err.parameters.id).exec(true);
+      return doc.updateCRDT(entry);
+    } else {
+      throw err;
+    }
+  });
+  return result;
+}
 function sortOperationComparator(a, b) {
   return a.creator > b.creator ? 1 : -1;
 }
 function runOperationOnDocument(storageStatics, schema, docData, operation) {
   var entryParts = operation.body;
-  entryParts.forEach(function (entryPart) {
+  entryParts.forEach(entryPart => {
     var isMatching;
     if (entryPart.selector) {
       var preparedQuery = storageStatics.prepareQuery(schema, {
-        selector: (0, _util.ensureNotFalsy)(entryPart.selector),
+        selector: (0, _utils.ensureNotFalsy)(entryPart.selector),
         sort: [],
         skip: 0
       });
@@ -134,21 +105,19 @@ function runOperationOnDocument(storageStatics, schema, docData, operation) {
     }
     if (isMatching) {
       if (entryPart.ifMatch) {
-        docData = (0, _modifyjs["default"])(docData, entryPart.ifMatch);
+        docData = (0, _modifyjs.default)(docData, entryPart.ifMatch);
       }
     } else {
       if (entryPart.ifNotMatch) {
-        docData = (0, _modifyjs["default"])(docData, entryPart.ifNotMatch);
+        docData = (0, _modifyjs.default)(docData, entryPart.ifNotMatch);
       }
     }
   });
   return docData;
 }
 function hashCRDTOperations(hashFunction, crdts) {
-  var hashObj = crdts.operations.map(function (operations) {
-    return operations.map(function (op) {
-      return op.creator;
-    });
+  var hashObj = crdts.operations.map(operations => {
+    return operations.map(op => op.creator);
   });
   var hash = hashFunction(JSON.stringify(hashObj));
   return hash;
@@ -213,24 +182,22 @@ function mergeCRDTFields(hashFunction, crdtsA, crdtsB) {
   // the value with most operations must be A to
   // ensure we not miss out rows when iterating over both fields.
   if (crdtsA.operations.length < crdtsB.operations.length) {
-    var _ref = [crdtsB, crdtsA];
-    crdtsA = _ref[0];
-    crdtsB = _ref[1];
+    [crdtsA, crdtsB] = [crdtsB, crdtsA];
   }
   var ret = {
     operations: [],
     hash: ''
   };
-  crdtsA.operations.forEach(function (row, index) {
+  crdtsA.operations.forEach((row, index) => {
     var mergedOps = [];
     var ids = new Set(); // used to deduplicate
 
-    row.forEach(function (op) {
+    row.forEach(op => {
       ids.add(op.creator);
       mergedOps.push(op);
     });
     if (crdtsB.operations[index]) {
-      crdtsB.operations[index].forEach(function (op) {
+      crdtsB.operations[index].forEach(op => {
         if (!ids.has(op.creator)) {
           mergedOps.push(op);
         }
@@ -246,19 +213,19 @@ function rebuildFromCRDT(storageStatics, schema, docData, crdts) {
   var base = {
     _deleted: false
   };
-  _objectPath["default"].set(base, (0, _util.ensureNotFalsy)(schema.crdt).field, crdts);
-  crdts.operations.forEach(function (operations) {
-    operations.forEach(function (op) {
+  (0, _utils.setProperty)(base, (0, _utils.ensureNotFalsy)(schema.crdt).field, crdts);
+  crdts.operations.forEach(operations => {
+    operations.forEach(op => {
       base = runOperationOnDocument(storageStatics, schema, base, op);
     });
   });
   return base;
 }
 function getCRDTConflictHandler(hashFunction, storageStatics, schema) {
-  var crdtOptions = (0, _util.ensureNotFalsy)(schema.crdt);
+  var crdtOptions = (0, _utils.ensureNotFalsy)(schema.crdt);
   var crdtField = crdtOptions.field;
-  var getCRDTValue = (0, _util.objectPathMonad)(crdtField);
-  var conflictHandler = function conflictHandler(i, _context) {
+  var getCRDTValue = (0, _utils.objectPathMonad)(crdtField);
+  var conflictHandler = (i, _context) => {
     var newDocCrdt = getCRDTValue(i.newDocumentState);
     var masterDocCrdt = getCRDTValue(i.realMasterState);
     if (newDocCrdt.hash === masterDocCrdt.hash) {
@@ -281,7 +248,7 @@ var RxDBcrdtPlugin = {
   name: 'crdt',
   rxdb: true,
   prototypes: {
-    RxDocument: function RxDocument(proto) {
+    RxDocument: proto => {
       proto.updateCRDT = updateCRDT;
       var oldRemove = proto.remove;
       proto.remove = function () {
@@ -296,10 +263,10 @@ var RxDBcrdtPlugin = {
           }
         });
       };
-      var oldAtomicPatch = proto.atomicPatch;
-      proto.atomicPatch = function (patch) {
+      var oldincrementalPatch = proto.incrementalPatch;
+      proto.incrementalPatch = function (patch) {
         if (!this.collection.schema.jsonSchema.crdt) {
-          return oldAtomicPatch.bind(this)(patch);
+          return oldincrementalPatch.bind(this)(patch);
         }
         return this.updateCRDT({
           ifMatch: {
@@ -307,31 +274,31 @@ var RxDBcrdtPlugin = {
           }
         });
       };
-      var oldAtomicUpdate = proto.atomicUpdate;
-      proto.atomicUpdate = function (fn, context) {
+      var oldincrementalModify = proto.incrementalModify;
+      proto.incrementalModify = function (fn, context) {
         if (!this.collection.schema.jsonSchema.crdt) {
-          return oldAtomicUpdate.bind(this)(fn);
+          return oldincrementalModify.bind(this)(fn);
         }
         if (context === RX_CRDT_CONTEXT) {
-          return oldAtomicUpdate.bind(this)(fn);
+          return oldincrementalModify.bind(this)(fn);
         } else {
           throw (0, _rxError.newRxError)('CRDT2', {
             id: this.primary,
             args: {
-              context: context
+              context
             }
           });
         }
       };
     },
-    RxCollection: function RxCollection(proto) {
+    RxCollection: proto => {
       proto.insertCRDT = insertCRDT;
     }
   },
   overwritable: {},
   hooks: {
     preCreateRxCollection: {
-      after: function after(data) {
+      after: data => {
         if (!data.schema.crdt) {
           return;
         }
@@ -345,14 +312,15 @@ var RxDBcrdtPlugin = {
       }
     },
     createRxCollection: {
-      after: function after(_ref2) {
-        var collection = _ref2.collection;
+      after: ({
+        collection
+      }) => {
         if (!collection.schema.jsonSchema.crdt) {
           return;
         }
-        var crdtOptions = (0, _util.ensureNotFalsy)(collection.schema.jsonSchema.crdt);
+        var crdtOptions = (0, _utils.ensureNotFalsy)(collection.schema.jsonSchema.crdt);
         var crdtField = crdtOptions.field;
-        var getCrdt = (0, _util.objectPathMonad)(crdtOptions.field);
+        var getCrdt = (0, _utils.objectPathMonad)(crdtOptions.field);
 
         /**
          * In dev-mode we have to ensure that all document writes
@@ -362,22 +330,20 @@ var RxDBcrdtPlugin = {
         if (_.overwritable.isDevMode()) {
           var bulkWriteBefore = collection.storageInstance.bulkWrite.bind(collection.storageInstance);
           collection.storageInstance.bulkWrite = function (writes, context) {
-            writes.forEach(function (write) {
-              var newDocState = (0, _util.clone)(write.document);
+            writes.forEach(write => {
+              var newDocState = (0, _utils.clone)(write.document);
               var crdts = getCrdt(newDocState);
               var rebuild = rebuildFromCRDT(collection.database.storage.statics, collection.schema.jsonSchema, newDocState, crdts);
               function docWithoutMeta(doc) {
                 var ret = {};
-                Object.entries(doc).forEach(function (_ref3) {
-                  var k = _ref3[0],
-                    v = _ref3[1];
+                Object.entries(doc).forEach(([k, v]) => {
                   if (!k.startsWith('_')) {
                     ret[k] = v;
                   }
                 });
                 return ret;
               }
-              if (!(0, _fastDeepEqual["default"])(docWithoutMeta(newDocState), docWithoutMeta(rebuild))) {
+              if (!(0, _utils.deepEqual)(docWithoutMeta(newDocState), docWithoutMeta(rebuild))) {
                 throw (0, _rxError.newRxError)('SNH', {
                   document: newDocState
                 });
@@ -388,7 +354,7 @@ var RxDBcrdtPlugin = {
                   document: newDocState,
                   args: {
                     hash: crdts.hash,
-                    recalculatedHash: recalculatedHash
+                    recalculatedHash
                   }
                 });
               }
@@ -397,39 +363,32 @@ var RxDBcrdtPlugin = {
           };
         }
         var bulkInsertBefore = collection.bulkInsert.bind(collection);
-        collection.bulkInsert = function (docsData) {
-          try {
-            return Promise.resolve(collection.database.storageToken).then(function (storageToken) {
-              var useDocsData = docsData.map(function (docData) {
-                var setMe = {};
-                Object.entries(docData).forEach(function (_ref4) {
-                  var key = _ref4[0],
-                    value = _ref4[1];
-                  if (!key.startsWith('_') && key !== crdtField) {
-                    setMe[key] = value;
-                  }
-                });
-                var crdtOperations = {
-                  operations: [[{
-                    creator: storageToken,
-                    body: [{
-                      ifMatch: {
-                        $set: setMe
-                      }
-                    }],
-                    time: (0, _util.now)()
-                  }]],
-                  hash: ''
-                };
-                crdtOperations.hash = hashCRDTOperations(collection.database.hashFunction, crdtOperations);
-                _objectPath["default"].set(docData, crdtOptions.field, crdtOperations);
-                return docData;
-              });
-              return bulkInsertBefore(useDocsData);
+        collection.bulkInsert = async function (docsData) {
+          var storageToken = await collection.database.storageToken;
+          var useDocsData = docsData.map(docData => {
+            var setMe = {};
+            Object.entries(docData).forEach(([key, value]) => {
+              if (!key.startsWith('_') && key !== crdtField) {
+                setMe[key] = value;
+              }
             });
-          } catch (e) {
-            return Promise.reject(e);
-          }
+            var crdtOperations = {
+              operations: [[{
+                creator: storageToken,
+                body: [{
+                  ifMatch: {
+                    $set: setMe
+                  }
+                }],
+                time: (0, _utils.now)()
+              }]],
+              hash: ''
+            };
+            crdtOperations.hash = hashCRDTOperations(collection.database.hashFunction, crdtOperations);
+            (0, _utils.setProperty)(docData, crdtOptions.field, crdtOperations);
+            return docData;
+          });
+          return bulkInsertBefore(useDocsData);
         };
       }
     }
